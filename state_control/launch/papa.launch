@@ -1,0 +1,96 @@
+<launch>
+  
+  <arg name="model" default="QuadrotorPapa"/>
+
+  <include file="$(find vicon)/launch/vicon.launch" />
+
+  <!-- Launch vicon odometry node -->
+  <include file="$(find vicon_odom)/launch/ViconOdom.launch">
+    <arg name="model" value="$(arg model)" />
+  </include>
+
+  <!-- This is for the MIDI controller -->
+  <!-- 
+  <node pkg="korg_nanokontrol2"
+    type="kontrol.py"
+    name="korg_nanokontrol2"
+    output="screen" 
+    args="5"/>
+  -->
+
+  <group ns="$(arg model)">
+    
+    <!-- Controllers Manager -->
+    <node pkg="nodelet"
+      type="nodelet"
+      name="standalone_nodelet"
+      args="manager"
+      output="screen"/>
+
+    <node pkg="nodelet"
+      type="nodelet"
+      name="controllers_manager"
+      args="load controllers_manager/ControllersManager standalone_nodelet"
+      output="screen">
+      <rosparam file="$(find controllers_manager)/config/controllers.yaml"/>
+      <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
+      <remap from="~odom" to="odom"/>
+      <remap from="~cmd" to="position_cmd"/>
+    </node>
+
+    <!-- This is for so3 control -->
+    <node pkg="nodelet"
+      type="nodelet"
+      args="load so3_control/SO3ControlNodelet standalone_nodelet"
+      name="so3_control"
+      required="true"
+      output="screen">
+      <remap from="~odom" to="odom"/>
+      <remap from="~position_cmd" to="position_cmd"/>
+      <remap from="~motors" to="motors"/>
+      <remap from="~corrections" to="corrections"/>
+      <remap from="~so3_cmd" to="so3_cmd"/>
+      <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
+      <param name="mass" value="0.580"/>
+    </node>
+
+    <node pkg="nodelet"
+      type="nodelet"
+      name="quad_encode_msg"
+      args="load quad_encode_msg/QuadEncodeMsg standalone_nodelet"
+      output="screen">
+      <remap from="~so3_cmd" to="so3_cmd"/>
+      <remap from="~serial_msg" to="to_robot"/>
+    </node>
+
+    <node pkg="nodelet"
+      type="nodelet"
+      name="quad_decode_msg"
+      args="load quad_decode_msg/QuadDecodeMsg standalone_nodelet"
+      output="screen">
+      <remap from="~serial" to="from_robot"/>
+    </node>
+
+    <!-- For serial communication -->
+    <node pkg="nodelet"
+      type="nodelet"
+      name="quad_serial_comm"
+      args="load quad_serial_comm/QuadSerialComm standalone_nodelet"
+      output="screen">
+      <param name="device" value="/dev/ttyUSB0"/>
+      <param name="baud_rate" value="230400"/>
+      param name="baud_rate" value="57600"/>
+      <remap from="~to_robot" to="to_robot"/>
+      <remap from="~from_robot" to="from_robot"/>
+    </node>
+    
+    <!-- This is the state control node -->
+    <node pkg="state_control"
+	    type="state_control"
+	    name="state_control"
+      output="screen">
+      <rosparam file="$(find state_control)/config/$(arg model)_params.yaml" />
+    </node>
+  </group>
+
+</launch>

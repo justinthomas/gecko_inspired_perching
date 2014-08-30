@@ -1,0 +1,28 @@
+header: 
+  seq: 213
+  stamp: 
+    secs: 1409365643
+    nsecs: 192918177
+  frame_id: /quadrotor
+force: 
+  x: 0.0
+  y: 0.0
+  z: 4.90227651596
+orientation: 
+  x: 0.0
+  y: 0.0
+  z: 0.0
+  w: 1.0
+angular_velocity: 
+  x: 0.0
+  y: 0.0
+  z: 0.0
+aux: 
+  current_yaw: 0.0
+  kf_correction: 0.0
+  angle_corrections: [0.0, 0.0]
+  enable_motors: True
+  use_external_yaw: True
+kR: [1.5, 1.5, 1.0]
+kOm: [0.12999999523162842, 0.12999999523162842, 0.10000000149011612]
+

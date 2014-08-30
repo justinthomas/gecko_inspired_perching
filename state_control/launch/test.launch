@@ -1,0 +1,10 @@
+<launch>
+  <group ns="quadrotor">
+  <!-- This is the state control node -->
+	  <node pkg="state_control"
+	    type="state_control"
+	    name="state_control"
+	    output="screen" />
+  </group>
+</launch>
+
