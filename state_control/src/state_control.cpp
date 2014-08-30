@@ -3,7 +3,7 @@
 #include <geometry_msgs/Vector3.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <geometry_msgs/Quaternion.h>
-#include <velocity_tracker/GoalCommandWithYaw.h>
+#include <quadrotor_msgs/FlatOutputs.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Bool.h>
@@ -151,14 +151,14 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     {    
       case VELOCITY_TRACKER:
         {
-        velocity_tracker::GoalCommandWithYaw goal;
-        goal.x = msg->axes[0] * fabs(msg->axes[0]) / 2;
-        goal.y = msg->axes[1] * fabs(msg->axes[1]) / 2;
-        goal.z = msg->axes[2] * fabs(msg->axes[2]) / 2;
-        goal.yaw_dot = msg->axes[3] * fabs(msg->axes[3]) / 2;
-       
-        pub_goal_velocity_.publish(goal);
-        ROS_INFO("Velocity Command: (%1.4f, %1.4f, %1.4f, %1.4f)", goal.x, goal.y, goal.z, goal.yaw_dot);
+          quadrotor_msgs::FlatOutputs goal;
+          goal.x = msg->axes[0] * fabs(msg->axes[0]) / 2;
+          goal.y = msg->axes[1] * fabs(msg->axes[1]) / 2;
+          goal.z = msg->axes[2] * fabs(msg->axes[2]) / 2;
+          goal.yaw = msg->axes[3] * fabs(msg->axes[3]) / 2;
+         
+          pub_goal_velocity_.publish(goal);
+          ROS_INFO("Velocity Command: (%1.4f, %1.4f, %1.4f, %1.4f)", goal.x, goal.y, goal.z, goal.yaw);
         }
         break;
 
@@ -182,7 +182,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       geometry_msgs::Point goal;
       goal.x = 2*msg->axes[0] + xoff;
       goal.y = 2*msg->axes[1] + yoff;
-      goal.z = msg->axes[2] + .9 + zoff;
+      goal.z = msg->axes[2] + 1.0 + zoff;
       pub_goal_min_jerk_.publish(goal);
       controllers_manager::Transition transition_cmd;
       transition_cmd.request.controller = line_tracker;
@@ -193,8 +193,11 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     {
       state_ = LINE_TRACKER_YAW;
       ROS_INFO("Engaging controller: LINE_TRACKER_YAW");
-      std_msgs::Float64 goal;
-      goal.data = M_PI * msg->axes[3] + yaw_off;
+      quadrotor_msgs::FlatOutputs goal;
+      goal.x = 2*msg->axes[0] + xoff;
+      goal.y = 2*msg->axes[1] + yoff;
+      goal.z = msg->axes[2] + 1.0 + zoff;
+      goal.yaw = M_PI * msg->axes[3] + yaw_off;
       pub_goal_yaw_.publish(goal);
       controllers_manager::Transition transition_cmd;
       transition_cmd.request.controller = line_tracker_yaw;
@@ -210,11 +213,11 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       state_ = VELOCITY_TRACKER;
       ROS_INFO("Engaging controller: VELOCITY_TRACKER");
 
-      velocity_tracker::GoalCommandWithYaw goal;
+      quadrotor_msgs::FlatOutputs goal;
       goal.x = 0;
       goal.y = 0;
       goal.z = 0;
-      goal.yaw_dot = 0;
+      goal.yaw = 0;
       pub_goal_velocity_.publish(goal);
       controllers_manager::Transition transition_cmd;
       transition_cmd.request.controller = velocity_tracker_str;
@@ -237,14 +240,16 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       {
         state_ = PREP_TRAJ;
         ROS_INFO("Loading Trajectory.  state_ == PREP_TRAJ;");
-        
+       
+        quadrotor_msgs::FlatOutputs goal;
         goal.x = traj[0][0][0] + xoff;
         goal.y = traj[0][1][0] + yoff;
         goal.z = traj[0][2][0] + zoff;
-
-        pub_goal_min_jerk_.publish(goal);
+        goal.yaw = traj[0][3][0] + yaw_off;
+        
+        pub_goal_yaw_.publish(goal);
         controllers_manager::Transition transition_cmd;
-        transition_cmd.request.controller = line_tracker;
+        transition_cmd.request.controller = line_tracker_yaw;
         srv_transition_.call(transition_cmd);
       }
     }
@@ -395,8 +400,8 @@ int main(int argc, char **argv)
   srv_transition_= n.serviceClient<controllers_manager::Transition>("controllers_manager/transition");
   pub_goal_min_jerk_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker/goal", 1);
   pub_goal_distance_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker_distance/goal", 1);
-  pub_goal_velocity_ = n.advertise<velocity_tracker::GoalCommandWithYaw>("controllers_manager/velocity_tracker/vel_cmd_with_yaw", 1);
-  pub_goal_yaw_ = n.advertise<std_msgs::Float64>("controllers_manager/line_tracker_yaw/goal", 1);
+  pub_goal_velocity_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/velocity_tracker/vel_cmd_with_yaw", 1);
+  pub_goal_yaw_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/line_tracker_yaw/goal", 1);
   pub_info_bool_ = n.advertise<std_msgs::Bool>("traj_signal", 1);
   pub_motors_ = n.advertise<std_msgs::Bool>("motors", 1);
   pub_estop_ = n.advertise<std_msgs::Empty>("estop", 1);
