@@ -241,6 +241,10 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
         state_ = PREP_TRAJ;
         ROS_INFO("Loading Trajectory.  state_ == PREP_TRAJ;");
        
+        // Updates traj goal to allow for correct initalization of the trajectory 
+        traj_start_time = ros::Time::now();
+        updateTrajGoal(); 
+        
         quadrotor_msgs::FlatOutputs goal;
         goal.x = traj[0][0][0] + xoff;
         goal.y = traj[0][1][0] + yoff;
@@ -256,8 +260,8 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     else if(msg->buttons[play_button] && state_ == PREP_TRAJ)
     {
       // If we are ready to start the trajectory
-      if ( sqrt( pow(traj_goal.pos.x + xoff - pos_.x, 2) + pow(traj_goal.pos.y + yoff - pos_.y, 2) + pow(traj_goal.pos.z + zoff - pos_.z, 2) ) > .03 ||
-           sqrt( pow(vel_.x,2) + pow(vel_.y,2) + pow(vel_.z,2) ) > 0.05)
+      if ( sqrt( pow(traj_goal.pos.x + xoff - pos_.x, 2) + pow(traj_goal.pos.y + yoff - pos_.y, 2) + pow(traj_goal.pos.z + zoff - pos_.z, 2) ) < .03 ||
+           sqrt( pow(vel_.x,2) + pow(vel_.y,2) + pow(vel_.z,2) ) < 0.05)
       {
         ROS_INFO("Starting Trajectory");
 
