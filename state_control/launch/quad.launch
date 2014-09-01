@@ -7,6 +7,7 @@
   <!-- Launch vicon odometry node -->
   <include file="$(find vicon_odom)/launch/ViconOdom.launch">
     <arg name="model" value="$(arg model)" />
+    <arg name="vicon_fps" value="150"/>
   </include>
 
   <!-- This is for the MIDI controller -->
@@ -90,6 +91,7 @@
 	    name="state_control"
       output="screen">
       <rosparam file="$(find state_control)/config/$(arg model)_params.yaml" />
+      <param name="safety_catch" value="false"/>
       <param name="traj_filename" type="string" value="/home/justin/Dropbox/Research/Perching/traj.csv"/>
 
     </node>
