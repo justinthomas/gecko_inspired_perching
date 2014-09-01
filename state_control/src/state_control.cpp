@@ -4,6 +4,7 @@
 #include <geometry_msgs/Vector3Stamped.h>
 #include <geometry_msgs/Quaternion.h>
 #include <quadrotor_msgs/FlatOutputs.h>
+#include <quadrotor_msgs/PositionCommand.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Bool.h>
@@ -14,7 +15,6 @@
 #include <math.h>
 #include <iostream>
 #include "nano_kontrol2.h"
-#include <trajectory_tracker/GoalCommand.h>
 #include <trajectory.h>
 #include <tf/transform_broadcaster.h>
 using namespace std;
@@ -30,7 +30,6 @@ enum controller_state
   LINE_TRACKER,
   LINE_TRACKER_YAW,
   VELOCITY_TRACKER,
-  VISION_CONTROL,
   LAND,
   PREP_TRAJ,
   TRAJ,
@@ -48,7 +47,7 @@ traj_type traj;
 ros::Time traj_start_time; 
 double traj_time;
 static ros::Publisher pub_goal_trajectory_;
-trajectory_tracker::GoalCommand traj_goal;
+quadrotor_msgs::PositionCommand traj_goal_;
 static const std::string trajectory_tracker_str("trajectory_tracker/TrajectoryTracker");
 void updateTrajGoal();
 static std::string traj_filename;
@@ -260,7 +259,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     else if(msg->buttons[play_button] && state_ == PREP_TRAJ)
     {
       // If we are ready to start the trajectory
-      if ( sqrt( pow(traj_goal.pos.x + xoff - pos_.x, 2) + pow(traj_goal.pos.y + yoff - pos_.y, 2) + pow(traj_goal.pos.z + zoff - pos_.z, 2) ) < .03 ||
+      if ( sqrt( pow(traj_goal_.position.x + xoff - pos_.x, 2) + pow(traj_goal_.position.y + yoff - pos_.y, 2) + pow(traj_goal_.position.z + zoff - pos_.z, 2) ) < .03 ||
            sqrt( pow(vel_.x,2) + pow(vel_.y,2) + pow(vel_.z,2) ) < 0.05)
       {
         ROS_INFO("Starting Trajectory");
@@ -276,7 +275,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
         
         updateTrajGoal();
                 
-        pub_goal_trajectory_.publish(traj_goal);
+        pub_goal_trajectory_.publish(traj_goal_);
         controllers_manager::Transition transition_cmd;
         transition_cmd.request.controller = trajectory_tracker_str;
         srv_transition_.call(transition_cmd);
@@ -304,20 +303,27 @@ void updateTrajGoal()
   }
   else
   {
-    traj_goal.pos.x = traj[i][0][0] + xoff;
-    traj_goal.pos.y = traj[i][1][0] + yoff;
-    traj_goal.pos.z = traj[i][2][0] + zoff;
-    traj_goal.pos.yaw = traj[i][3][0] + yaw_off;
+    traj_goal_.position.x = traj[i][0][0] + xoff;
+    traj_goal_.position.y = traj[i][1][0] + yoff;
+    traj_goal_.position.z = traj[i][2][0] + zoff;
     
-    traj_goal.vel.x = traj[i][0][1];
-    traj_goal.vel.y = traj[i][1][1];
-    traj_goal.vel.z = traj[i][2][1];
-    traj_goal.vel.yaw = traj[i][3][1];
+    traj_goal_.velocity.x = traj[i][0][1];
+    traj_goal_.velocity.y = traj[i][1][1];
+    traj_goal_.velocity.z = traj[i][2][1];
 
-    traj_goal.acc.x = traj[i][0][2];
-    traj_goal.acc.y = traj[i][1][2];
-    traj_goal.acc.z = traj[i][2][2];
-    traj_goal.acc.yaw = traj[i][3][2];
+    traj_goal_.acceleration.x = traj[i][0][2];
+    traj_goal_.acceleration.y = traj[i][1][2];
+    traj_goal_.acceleration.z = traj[i][2][2];
+
+    traj_goal_.jerk.x = traj[i][0][3];
+    traj_goal_.jerk.y = traj[i][1][3];
+    traj_goal_.jerk.z = traj[i][2][3];
+
+    traj_goal_.yaw = traj[i][3][0] + yaw_off;
+    traj_goal_.yaw_dot = traj[i][3][1];
+  
+    // traj_goal_->kx[0] = kx_[0], traj_goal_->kx[1] = kx_[1], traj_goal_->kx[2] = kx_[2];
+    // traj_goal_->kv[0] = kv_[0], traj_goal_->kv[1] = kv_[1], traj_goal_->kv[2] = kv_[2];
   }
 }
 
@@ -355,7 +361,7 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
   if (state_ == TRAJ)
   {
     updateTrajGoal();
-    pub_goal_trajectory_.publish(traj_goal);
+    pub_goal_trajectory_.publish(traj_goal_);
   }
 
   static tf::Quaternion q;
@@ -394,8 +400,17 @@ int main(int argc, char **argv)
   n.param("state_control/offsets/x", xoff, 0.0);
   n.param("state_control/offsets/y", yoff, 0.0);
   n.param("state_control/offsets/z", zoff, 0.0);
-  n.param("state_control/offsets/yaw", yaw_off, 0.0); 
+  n.param("state_control/offsets/yaw", yaw_off, 0.0);
+
   ROS_INFO("Quad using offsets: {xoff: %2.2f, yoff: %2.2f, zoff: %2.2f, yaw_off: %2.2f}", xoff, yoff, zoff, yaw_off);
+  
+  // Gains needed for trajectory tracker
+  //n.param("gains/pos/x", kx_[0], 2.5);
+  //n.param("gains/pos/y", kx_[1], 2.5);
+  //n.param("gains/pos/z", kx_[2], 5.0);
+  //n.param("gains/vel/x", kv_[0], 2.2);
+  //n.param("gains/vel/y", kv_[1], 2.2);
+  //n.param("gains/vel/z", kv_[2], 4.0);
 
   n.param("state_control/traj_filename", traj_filename, string("traj.csv"));
   n.param("state_control/safety_catch", safety, true);
@@ -416,7 +431,7 @@ int main(int argc, char **argv)
   ros::Subscriber sub_nanokontrol = n.subscribe("/nanokontrol2", 1, nanokontrol_cb, ros::TransportHints().tcpNoDelay());
 
   // Trajectory publisher
-  pub_goal_trajectory_ = n.advertise<trajectory_tracker::GoalCommand>("controllers_manager/trajectory_tracker/goal", 1);
+  pub_goal_trajectory_ = n.advertise<quadrotor_msgs::PositionCommand>("controllers_manager/trajectory_tracker/goal", 1);
 
   // Disabling the motors to be safe
   /* 
