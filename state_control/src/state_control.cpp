@@ -26,11 +26,11 @@ enum controller_state
   INIT,
   TAKEOFF,
   HOVER,
-  HOME,
-  LINE_TRACKER,
+  LINE_TRACKER_JERK,
   LINE_TRACKER_YAW,
   VELOCITY_TRACKER,
-  LAND,
+  PERCH,
+  RECOVER,
   PREP_TRAJ,
   TRAJ,
   NONE,
@@ -39,6 +39,7 @@ enum controller_state
 // Variables and parameters
 double xoff, yoff, zoff, yaw_off;
 bool safety;
+static geometry_msgs::Point home_;
 
 // Stuff for trajectory
 #include <string>
@@ -74,13 +75,15 @@ static bool imu_info_ = false;
 
 // Strings
 static const std::string line_tracker_distance("line_tracker/LineTrackerDistance");
-static const std::string line_tracker("line_tracker/LineTrackerJerk");
+static const std::string line_tracker_jerk("line_tracker/LineTrackerJerk");
 static const std::string line_tracker_yaw("line_tracker/LineTrackerYaw");
 static const std::string velocity_tracker_str("velocity_tracker/VelocityTrackerYaw");
 
 // Function Declarations
 void hover_in_place();
 void hover_at(const geometry_msgs::Point goal);
+void go_home();
+void go_to(const quadrotor_msgs::FlatOutputs goal);
 
 // Callbacks and functions
 static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
@@ -130,11 +133,11 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       state_ = TAKEOFF;
       ROS_INFO("Initiating launch sequence...");
 
-      geometry_msgs::Point goal;
-      goal.x = pos_.x;
-      goal.y = pos_.y;
-      goal.z = pos_.z + 0.10;
-      pub_goal_distance_.publish(goal);
+      // home_ has global scope
+      home_.x = pos_.x;
+      home_.y = pos_.y;
+      home_.z = pos_.z + 0.10;
+      pub_goal_distance_.publish(home_);
       usleep(100000);
       controllers_manager::Transition transition_cmd;
       transition_cmd.request.controller = line_tracker_distance;
@@ -174,17 +177,17 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       hover_in_place(); 
     }
     // Line Tracker
-    else if(selected && msg->buttons[line_tracker_button] && (state_ == HOVER || state_ == LINE_TRACKER || state_ == TAKEOFF))
+    else if(selected && msg->buttons[line_tracker_button] && (state_ == HOVER || state_ == LINE_TRACKER_JERK || state_ == TAKEOFF))
     {
-      state_ = LINE_TRACKER;
-      ROS_INFO("Engaging controller: LINE_TRACKER");
+      state_ = LINE_TRACKER_JERK;
+      ROS_INFO("Engaging controller: LINE_TRACKER_JERK");
       geometry_msgs::Point goal;
       goal.x = 2*msg->axes[0] + xoff;
       goal.y = 2*msg->axes[1] + yoff;
       goal.z = msg->axes[2] + 1.0 + zoff;
       pub_goal_min_jerk_.publish(goal);
       controllers_manager::Transition transition_cmd;
-      transition_cmd.request.controller = line_tracker;
+      transition_cmd.request.controller = line_tracker_jerk;
       srv_transition_.call(transition_cmd);
     }
     // Line Tracker Yaw
@@ -299,7 +302,10 @@ void updateTrajGoal()
   if (i > traj.size()-1)
   {
     ROS_INFO("Trajectory completed.");
-    
+   
+
+    // At this point, we could call switch to a perch state, which
+    // could trigger a recover if the perch was not successful  
     geometry_msgs::Point goal;
     goal.x = traj[traj.size()-1][0][0] + xoff;
     goal.y = traj[traj.size()-1][1][0] + yoff;
@@ -345,11 +351,13 @@ void updateTrajGoal()
   }
 }
 
+/*
 static void imu_cb(const sensor_msgs::Imu::ConstPtr &msg)
 {
   imu_q_ = msg->orientation;
   imu_info_ = true;
 }
+*/
 
 void hover_at(const geometry_msgs::Point goal)
 {
@@ -376,6 +384,26 @@ void hover_in_place()
   usleep(100000);
   controllers_manager::Transition transition_cmd;
   transition_cmd.request.controller = line_tracker_distance; 
+  srv_transition_.call(transition_cmd);
+}
+
+void go_home()
+{
+  state_ = LINE_TRACKER_JERK;
+  ROS_INFO("Engaging controller: LINE_TRACKER_JERK");
+  pub_goal_min_jerk_.publish(home_);
+  controllers_manager::Transition transition_cmd;
+  transition_cmd.request.controller = line_tracker_jerk;
+  srv_transition_.call(transition_cmd);
+}
+
+void go_to(const quadrotor_msgs::FlatOutputs &goal)
+{
+  state_ = LINE_TRACKER_YAW;
+  ROS_INFO("Engaging controller: LINE_TRACKER_YAW");
+  pub_goal_yaw_.publish(goal);
+  controllers_manager::Transition transition_cmd;
+  transition_cmd.request.controller = line_tracker_yaw;
   srv_transition_.call(transition_cmd);
 }
 
@@ -431,7 +459,6 @@ int main(int argc, char **argv)
   n.param("state_control/offsets/y", yoff, 0.0);
   n.param("state_control/offsets/z", zoff, 0.0);
   n.param("state_control/offsets/yaw", yaw_off, 0.0);
-
   ROS_INFO("Quad using offsets: {xoff: %2.2f, yoff: %2.2f, zoff: %2.2f, yaw_off: %2.2f}", xoff, yoff, zoff, yaw_off);
  
   n.param("state_control/traj_filename", traj_filename, string("traj.csv"));
@@ -443,36 +470,14 @@ int main(int argc, char **argv)
   pub_goal_distance_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker_distance/goal", 1);
   pub_goal_velocity_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/velocity_tracker/vel_cmd_with_yaw", 1);
   pub_goal_yaw_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/line_tracker_yaw/goal", 1);
+  pub_goal_trajectory_ = n.advertise<quadrotor_msgs::PositionCommand>("controllers_manager/trajectory_tracker/goal", 1);
   pub_info_bool_ = n.advertise<std_msgs::Bool>("traj_signal", 1);
   pub_motors_ = n.advertise<std_msgs::Bool>("motors", 1);
   pub_estop_ = n.advertise<std_msgs::Empty>("estop", 1);
 
   // Subscribers
   ros::Subscriber sub_odom = n.subscribe("odom", 1, &odom_cb, ros::TransportHints().tcpNoDelay());
-  ros::Subscriber sub_imu = n.subscribe("quad_decode_msg/imu", 1, &imu_cb, ros::TransportHints().tcpNoDelay());
   ros::Subscriber sub_nanokontrol = n.subscribe("/nanokontrol2", 1, nanokontrol_cb, ros::TransportHints().tcpNoDelay());
-
-  // Trajectory publisher
-  pub_goal_trajectory_ = n.advertise<quadrotor_msgs::PositionCommand>("controllers_manager/trajectory_tracker/goal", 1);
-
-  // Disabling the motors to be safe
-  /* 
-  ROS_INFO("Disabling motors for launch");
-  std_msgs::Bool motors_cmd;
-  motors_cmd.data = false;
-  pub_motors_.publish(motors_cmd);
-  usleep(100000);
-
-  geometry_msgs::Point goal;
-  goal.x = pos_.x;
-  goal.y = pos_.y;
-  goal.z = pos_.z;
-  pub_goal_distance_.publish(goal);
-  usleep(100000);
-  controllers_manager::Transition transition_cmd;
-  transition_cmd.request.controller = line_tracker_distance;
-  srv_transition_.call(transition_cmd);
-  */
 
   // Spin
   ros::spin();
