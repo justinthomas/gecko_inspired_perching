@@ -39,7 +39,6 @@ enum controller_state
 // Variables and parameters
 double xoff, yoff, zoff, yaw_off;
 bool safety;
-geometry_msgs::Point goal;
 
 // Stuff for trajectory
 #include <string>
@@ -75,12 +74,13 @@ static bool imu_info_ = false;
 
 // Strings
 static const std::string line_tracker_distance("line_tracker/LineTrackerDistance");
-static const std::string line_tracker("line_tracker/LineTracker");
+static const std::string line_tracker("line_tracker/LineTrackerJerk");
 static const std::string line_tracker_yaw("line_tracker/LineTrackerYaw");
 static const std::string velocity_tracker_str("velocity_tracker/VelocityTrackerYaw");
 
 // Function Declarations
 void hover_in_place();
+void hover_at(const geometry_msgs::Point goal);
 
 // Callbacks and functions
 static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
@@ -249,7 +249,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
         goal.y = traj[0][1][0] + yoff;
         goal.z = traj[0][2][0] + zoff;
         goal.yaw = traj[0][3][0] + yaw_off;
-        
+       
         pub_goal_yaw_.publish(goal);
         controllers_manager::Transition transition_cmd;
         transition_cmd.request.controller = line_tracker_yaw;
@@ -299,7 +299,12 @@ void updateTrajGoal()
   if (i > traj.size()-1)
   {
     ROS_INFO("Trajectory completed.");
-    hover_in_place();
+    
+    geometry_msgs::Point goal;
+    goal.x = traj[traj.size()-1][0][0] + xoff;
+    goal.y = traj[traj.size()-1][1][0] + yoff;
+    goal.z = traj[traj.size()-1][2][0] + zoff;
+    hover_at(goal);
   }
   else
   {
@@ -322,8 +327,21 @@ void updateTrajGoal()
     traj_goal_.yaw = traj[i][3][0] + yaw_off;
     traj_goal_.yaw_dot = traj[i][3][1];
   
-    // traj_goal_->kx[0] = kx_[0], traj_goal_->kx[1] = kx_[1], traj_goal_->kx[2] = kx_[2];
-    // traj_goal_->kv[0] = kv_[0], traj_goal_->kv[1] = kv_[1], traj_goal_->kv[2] = kv_[2];
+    traj_goal_.kx[0] = traj[i][4][0];
+    traj_goal_.kx[1] = traj[i][4][1];
+    traj_goal_.kx[2] = traj[i][4][2];
+    traj_goal_.kv[0] = traj[i][4][3];
+    traj_goal_.kv[1] = traj[i][4][4];
+    traj_goal_.kv[2] = traj[i][4][5];
+
+    ROS_INFO_THROTTLE(1, "Gains: kx: {%2.1f, %2.1f, %2.1f}, kv: {%2.1f, %2.1f, %2.1f}", 
+        traj[i][4][0],
+        traj[i][4][1],
+        traj[i][4][2],
+        traj[i][4][3],
+        traj[i][4][4],
+        traj[i][4][5]);
+
   }
 }
 
@@ -331,6 +349,18 @@ static void imu_cb(const sensor_msgs::Imu::ConstPtr &msg)
 {
   imu_q_ = msg->orientation;
   imu_info_ = true;
+}
+
+void hover_at(const geometry_msgs::Point goal)
+{
+  state_ = HOVER;
+  ROS_INFO("Hovering at (%2.2f, %2.2f, %2.2f, %2.2f)", goal.x, goal.y, goal.z);
+
+  pub_goal_distance_.publish(goal);
+  usleep(100000);
+  controllers_manager::Transition transition_cmd;
+  transition_cmd.request.controller = line_tracker_distance; 
+  srv_transition_.call(transition_cmd);
 }
 
 void hover_in_place()
@@ -403,21 +433,13 @@ int main(int argc, char **argv)
   n.param("state_control/offsets/yaw", yaw_off, 0.0);
 
   ROS_INFO("Quad using offsets: {xoff: %2.2f, yoff: %2.2f, zoff: %2.2f, yaw_off: %2.2f}", xoff, yoff, zoff, yaw_off);
-  
-  // Gains needed for trajectory tracker
-  //n.param("gains/pos/x", kx_[0], 2.5);
-  //n.param("gains/pos/y", kx_[1], 2.5);
-  //n.param("gains/pos/z", kx_[2], 5.0);
-  //n.param("gains/vel/x", kv_[0], 2.2);
-  //n.param("gains/vel/y", kv_[1], 2.2);
-  //n.param("gains/vel/z", kv_[2], 4.0);
-
+ 
   n.param("state_control/traj_filename", traj_filename, string("traj.csv"));
   n.param("state_control/safety_catch", safety, true);
 
   // Publishers
   srv_transition_= n.serviceClient<controllers_manager::Transition>("controllers_manager/transition");
-  pub_goal_min_jerk_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker/goal", 1);
+  pub_goal_min_jerk_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker_min_jerk/goal", 1);
   pub_goal_distance_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker_distance/goal", 1);
   pub_goal_velocity_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/velocity_tracker/vel_cmd_with_yaw", 1);
   pub_goal_yaw_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/line_tracker_yaw/goal", 1);
