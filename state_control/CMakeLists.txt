@@ -42,4 +42,4 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 #include_directories(${EIGEN3_INCLUDE_DIR})
 
 rosbuild_add_executable(state_control src/state_control.cpp src/trajectory.cpp)
-# rosbuild_add_executable(sc_ground_effect src/trajectory.cpp)
+#rosbuild_add_executable(state_control src/trajectory.cpp)
