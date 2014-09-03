@@ -26,9 +26,7 @@
       args="load controllers_manager/ControllersManager standalone_nodelet"
       output="screen">
       <rosparam file="$(find controllers_manager)/config/controllers.yaml"/>
-      <rosparam file="$(find so3_control)/config/gains.yaml"/>
-      <param name="line_tracker/default_v_des" value="1.0"/>
-      <param name="line_tracker/default_a_des" value="1.0"/>
+      <rosparam file="$(find controllers_manager)/config/controller_params.yaml"/>
       <remap from="~odom" to="odom"/>
       <remap from="~cmd" to="position_cmd"/>
     </node>

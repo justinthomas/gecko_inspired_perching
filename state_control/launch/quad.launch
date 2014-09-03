@@ -34,7 +34,7 @@
       args="load controllers_manager/ControllersManager standalone_nodelet"
       output="screen">
       <rosparam file="$(find controllers_manager)/config/controllers.yaml"/>
-      <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
+      <rosparam file="$(find controllers_manager)/config/controller_params.yaml"/>
       <remap from="~odom" to="odom"/>
       <remap from="~cmd" to="position_cmd"/>
     </node>
@@ -52,7 +52,7 @@
       <remap from="~corrections" to="corrections"/>
       <remap from="~so3_cmd" to="so3_cmd"/>
       <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
-      <param name="mass" value="0.485"/>
+      <param name="mass" value="0.5"/>
     </node>
 
     <node pkg="nodelet"
