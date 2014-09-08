@@ -1,13 +1,22 @@
 <launch>
   
+  <!-- Params --> 
   <arg name="model" default="QuadrotorFoxtrot"/>
+  <arg name="mass" value="0.565"/>
+  <!-- arg name="mass" value="0.5"/ -->
+  <arg name="vicon_fps" value="150"/>
 
   <include file="$(find vicon)/launch/vicon.launch" />
 
   <!-- Launch vicon odometry node -->
   <include file="$(find vicon_odom)/launch/ViconOdom.launch">
     <arg name="model" value="$(arg model)" />
-    <arg name="vicon_fps" value="150"/>
+    <arg name="vicon_fps" value="$(arg vicon_fps)"/>
+  </include>
+  
+  <include file="$(find vicon_odom)/launch/ViconOdom.launch">
+    <arg name="model" value="PerchPlate" />
+    <arg name="vicon_fps" value="$(arg vicon_fps)"/>
   </include>
 
   <!-- This is for the MIDI controller -->
@@ -35,6 +44,7 @@
       output="screen">
       <rosparam file="$(find controllers_manager)/config/controllers.yaml"/>
       <rosparam file="$(find controllers_manager)/config/controller_params.yaml"/>
+      <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
       <remap from="~odom" to="odom"/>
       <remap from="~cmd" to="position_cmd"/>
     </node>
@@ -52,7 +62,7 @@
       <remap from="~corrections" to="corrections"/>
       <remap from="~so3_cmd" to="so3_cmd"/>
       <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
-      <param name="mass" value="0.5"/>
+      <param name="mass" value="$(arg mass)"/>
     </node>
 
     <node pkg="nodelet"
@@ -92,8 +102,8 @@
       output="screen">
       <rosparam file="$(find state_control)/config/$(arg model)_params.yaml" />
       <param name="safety_catch" value="false"/>
-      <param name="traj_filename" type="string" value="/home/justin/Dropbox/Research/Perching/traj.csv"/>
-
+      <param name="traj_filename" type="string" value="/home/justin/Dropbox/papers_and_posters/2015-ICRA_Gecko_Perching/current_experiment/traj.csv"/>
+      <param name="mass" value="$(arg mass)"/>
     </node>
   </group>
 

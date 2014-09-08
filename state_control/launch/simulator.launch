@@ -65,7 +65,7 @@
       output="screen">
       <rosparam file="$(find state_control)/config/$(arg model)_params.yaml" />
       <param name="safety_catch" value="false"/>
-      <param name="traj_filename" type="string" value="/home/justin/Dropbox/Research/Perching/traj.csv"/>
+      <param name="traj_filename" type="string" value="/home/justin/Dropbox/papers_and_posters/2015-ICRA_Gecko_Perching/current_experiment/traj.csv"/>
     </node>
   </group>
 </launch>
