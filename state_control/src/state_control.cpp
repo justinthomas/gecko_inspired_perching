@@ -37,8 +37,8 @@ enum controller_state
 };
 
 // Variables and parameters
-double xoff, yoff, zoff, yaw_off;
-bool safety;
+double xoff, yoff, zoff, yaw_off, mass_;
+bool safety, cut_motors_after_traj;
 static geometry_msgs::Point home_;
 
 // Stuff for trajectory
@@ -71,7 +71,7 @@ static geometry_msgs::Vector3 vel_;
 static geometry_msgs::Quaternion ori_;
 static geometry_msgs::Quaternion imu_q_;
 static bool have_odom_ = false;
-static bool imu_info_ = false;
+// static bool imu_info_ = false;
 
 // Strings
 static const std::string line_tracker_distance("line_tracker/LineTrackerDistance");
@@ -88,6 +88,8 @@ void go_to(const quadrotor_msgs::FlatOutputs goal);
 // Callbacks and functions
 static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
 {
+  cut_motors_after_traj = msg->buttons[7];
+
   for(int i=0; i<35; i++)
   {
     if(msg->buttons[i]==1)
@@ -184,7 +186,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       geometry_msgs::Point goal;
       goal.x = 2*msg->axes[0] + xoff;
       goal.y = 2*msg->axes[1] + yoff;
-      goal.z = msg->axes[2] + 1.0 + zoff;
+      goal.z = 2*msg->axes[2] + 2.0 + zoff;
       pub_goal_min_jerk_.publish(goal);
       controllers_manager::Transition transition_cmd;
       transition_cmd.request.controller = line_tracker_jerk;
@@ -193,17 +195,12 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     // Line Tracker Yaw
     else if(selected && msg->buttons[line_tracker_yaw_button] && (state_ == HOVER || state_ == LINE_TRACKER_YAW || state_ == TAKEOFF))
     {
-      state_ = LINE_TRACKER_YAW;
-      ROS_INFO("Engaging controller: LINE_TRACKER_YAW");
       quadrotor_msgs::FlatOutputs goal;
       goal.x = 2*msg->axes[0] + xoff;
       goal.y = 2*msg->axes[1] + yoff;
-      goal.z = msg->axes[2] + 1.0 + zoff;
+      goal.z = 2*msg->axes[2] + 2.0 + zoff;
       goal.yaw = M_PI * msg->axes[3] + yaw_off;
-      pub_goal_yaw_.publish(goal);
-      controllers_manager::Transition transition_cmd;
-      transition_cmd.request.controller = line_tracker_yaw;
-      srv_transition_.call(transition_cmd);
+      go_to(goal);
     }
     // Velocity Tracker
     else if(selected && msg->buttons[velocity_tracker_button] && state_ == HOVER)
@@ -303,14 +300,19 @@ void updateTrajGoal()
   {
     ROS_INFO("Trajectory completed.");
    
-
+    
     // At this point, we could call switch to a perch state, which
     // could trigger a recover if the perch was not successful  
     geometry_msgs::Point goal;
     goal.x = traj[traj.size()-1][0][0] + xoff;
     goal.y = traj[traj.size()-1][1][0] + yoff;
     goal.z = traj[traj.size()-1][2][0] + zoff;
-    hover_at(goal);
+    state_ = PERCH; 
+    // hover_at(goal);
+    
+    std_msgs::Bool traj_on_signal;
+    traj_on_signal.data = false;
+    pub_info_bool_.publish(traj_on_signal);
   }
   else
   {
@@ -347,7 +349,6 @@ void updateTrajGoal()
         traj[i][4][3],
         traj[i][4][4],
         traj[i][4][5]);
-
   }
 }
 
@@ -362,7 +363,7 @@ static void imu_cb(const sensor_msgs::Imu::ConstPtr &msg)
 void hover_at(const geometry_msgs::Point goal)
 {
   state_ = HOVER;
-  ROS_INFO("Hovering at (%2.2f, %2.2f, %2.2f, %2.2f)", goal.x, goal.y, goal.z);
+  ROS_INFO("Hovering at (%2.2f, %2.2f, %2.2f)", goal.x, goal.y, goal.z);
 
   pub_goal_distance_.publish(goal);
   usleep(100000);
@@ -397,7 +398,7 @@ void go_home()
   srv_transition_.call(transition_cmd);
 }
 
-void go_to(const quadrotor_msgs::FlatOutputs &goal)
+void go_to(const quadrotor_msgs::FlatOutputs goal)
 {
   state_ = LINE_TRACKER_YAW;
   ROS_INFO("Engaging controller: LINE_TRACKER_YAW");
@@ -421,6 +422,55 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
     updateTrajGoal();
     pub_goal_trajectory_.publish(traj_goal_);
   }
+
+  if (state_ == PERCH)
+  {
+    if (cut_motors_after_traj)
+    {
+      // Publish the E-Stop command
+      ROS_WARN("E-STOP");
+      std_msgs::Empty estop_cmd;
+      pub_estop_.publish(estop_cmd);
+
+      // Disable motors
+      ROS_WARN("Disarming motors...");
+      std_msgs::Bool motors_cmd;
+      motors_cmd.data = false;
+      pub_motors_.publish(motors_cmd);
+
+      pub_goal_trajectory_.publish(traj_goal_);
+
+      //// We want the desired position and velocity errors to be zero
+      //traj_goal_.position = pos_;
+      //traj_goal_.velocity = vel_;
+     
+      //traj_goal_.acceleration = tf::Vector3(0,0,- 9.810);  
+      //// Specify the orientation
+      //float des_acc_mag = 0.0001;
+      //float acc_mag = std::sqrt(
+      //    traj_goal_.position.x*traj_goal_.position.x 
+      //    + traj_goal_.position.y*traj_goal_.position.y
+      //    + traj_goal_.position.z*traj_goal_.position.z);
+
+      //traj_goal_.acceleration.x = des_acc_mag * traj_goal_.acceleration.x / acc_mag;
+      //traj_goal_.acceleration.y = des_acc_mag * traj_goal_.acceleration.y / acc_mag;
+      //traj_goal_.acceleration.z = des_acc_mag * traj_goal_.acceleration.z / acc_mag - mass_ * 9.81; // Note: we are subtracting gravity
+
+      //// Angular rates = 0
+      //traj_goal_.jerk.x = 0;
+      //traj_goal_.jerk.y = 0;
+      //traj_goal_.jerk.z = 0;
+     
+      //// Publish the trajectory goal 
+      //// Note: the tracker will update the header.stamp and header.frame_id fields
+      //pub_goal_trajectory_.publish(traj_goal_);
+    }
+    else
+    {
+      hover_in_place();
+    }
+  }
+
 
   static tf::Quaternion q;
   static double roll, pitch, yaw;
@@ -463,6 +513,7 @@ int main(int argc, char **argv)
  
   n.param("state_control/traj_filename", traj_filename, string("traj.csv"));
   n.param("state_control/safety_catch", safety, true);
+  n.param("mass", mass_, 0.5);
 
   // Publishers
   srv_transition_= n.serviceClient<controllers_manager::Transition>("controllers_manager/transition");
