@@ -42,9 +42,9 @@
       name="controllers_manager"
       args="load controllers_manager/ControllersManager standalone_nodelet"
       output="screen">
-      <rosparam file="$(find controllers_manager)/config/controllers.yaml"/>
-      <rosparam file="$(find controllers_manager)/config/controller_params.yaml"/>
-      <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
+      <rosparam file="$(find state_control)/config/controllers.yaml"/>
+      <rosparam file="$(find state_control)/config/controller_params.yaml"/>
+      <rosparam file="$(find state_control)/config/hummingbird_gains.yaml"/>
       <remap from="~odom" to="odom"/>
       <remap from="~cmd" to="position_cmd"/>
     </node>
@@ -61,7 +61,7 @@
       <remap from="~motors" to="motors"/>
       <remap from="~corrections" to="corrections"/>
       <remap from="~so3_cmd" to="so3_cmd"/>
-      <rosparam file="$(find so3_control)/config/hummingbird_gains.yaml"/>
+      <rosparam file="$(find state_control)/config/hummingbird_gains.yaml"/>
       <param name="mass" value="$(arg mass)"/>
     </node>
 
