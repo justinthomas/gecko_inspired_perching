@@ -5,6 +5,7 @@
 #include <geometry_msgs/Quaternion.h>
 #include <quadrotor_msgs/FlatOutputs.h>
 #include <quadrotor_msgs/PositionCommand.h>
+#include <quadrotor_msgs/SO3Command.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Bool.h>
@@ -19,14 +20,12 @@
 #include <tf/transform_broadcaster.h>
 using namespace std;
 
-#define SAFETY_ON
-
 enum controller_state
 {
   INIT,
   TAKEOFF,
   HOVER,
-  LINE_TRACKER_JERK,
+  LINE_TRACKER_MIN_JERK,
   LINE_TRACKER_YAW,
   VELOCITY_TRACKER,
   PERCH,
@@ -51,6 +50,7 @@ quadrotor_msgs::PositionCommand traj_goal_;
 static const std::string trajectory_tracker_str("trajectory_tracker/TrajectoryTracker");
 void updateTrajGoal();
 static std::string traj_filename;
+quadrotor_msgs::SO3Command::Ptr so3_command_(new quadrotor_msgs::SO3Command);
 
 // States
 static enum controller_state state_ = INIT;
@@ -64,6 +64,7 @@ static ros::Publisher pub_estop_;
 static ros::Publisher pub_goal_yaw_;
 static ros::Publisher pub_info_bool_;
 static ros::ServiceClient srv_transition_;
+static ros::Publisher so3_command_pub_;
 
 // Quadrotor Pose
 static geometry_msgs::Point pos_;
@@ -75,9 +76,10 @@ static bool have_odom_ = false;
 
 // Strings
 static const std::string line_tracker_distance("line_tracker/LineTrackerDistance");
-static const std::string line_tracker_jerk("line_tracker/LineTrackerJerk");
+static const std::string line_tracker_min_jerk("line_tracker/LineTrackerMinJerk");
 static const std::string line_tracker_yaw("line_tracker/LineTrackerYaw");
 static const std::string velocity_tracker_str("velocity_tracker/VelocityTrackerYaw");
+static const std::string null_tracker_str("null_tracker/NullTracker");
 
 // Function Declarations
 void hover_in_place();
@@ -179,17 +181,17 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       hover_in_place(); 
     }
     // Line Tracker
-    else if(selected && msg->buttons[line_tracker_button] && (state_ == HOVER || state_ == LINE_TRACKER_JERK || state_ == TAKEOFF))
+    else if(selected && msg->buttons[line_tracker_button] && (state_ == HOVER || state_ == LINE_TRACKER_MIN_JERK || state_ == TAKEOFF))
     {
-      state_ = LINE_TRACKER_JERK;
-      ROS_INFO("Engaging controller: LINE_TRACKER_JERK");
+      state_ = LINE_TRACKER_MIN_JERK;
+      ROS_INFO("Engaging controller: LINE_TRACKER_MIN_JERK");
       geometry_msgs::Point goal;
       goal.x = 2*msg->axes[0] + xoff;
       goal.y = 2*msg->axes[1] + yoff;
       goal.z = 2*msg->axes[2] + 2.0 + zoff;
       pub_goal_min_jerk_.publish(goal);
       controllers_manager::Transition transition_cmd;
-      transition_cmd.request.controller = line_tracker_jerk;
+      transition_cmd.request.controller = line_tracker_min_jerk;
       srv_transition_.call(transition_cmd);
     }
     // Line Tracker Yaw
@@ -299,20 +301,43 @@ void updateTrajGoal()
   if (i > traj.size()-1)
   {
     ROS_INFO("Trajectory completed.");
-   
     
-    // At this point, we could call switch to a perch state, which
-    // could trigger a recover if the perch was not successful  
-    geometry_msgs::Point goal;
-    goal.x = traj[traj.size()-1][0][0] + xoff;
-    goal.y = traj[traj.size()-1][1][0] + yoff;
-    goal.z = traj[traj.size()-1][2][0] + zoff;
-    state_ = PERCH; 
-    // hover_at(goal);
-    
+    // Publish that we exiting the trajectory
     std_msgs::Bool traj_on_signal;
     traj_on_signal.data = false;
     pub_info_bool_.publish(traj_on_signal);
+ 
+    state_ = PERCH;
+    ROS_INFO("Switching to NullTracker");
+    controllers_manager::Transition transition_cmd;
+    transition_cmd.request.controller = null_tracker_str;
+    srv_transition_.call(transition_cmd);
+
+    // Generate the so3 command
+    so3_command_->header.stamp = ros::Time::now();
+    so3_command_->header.frame_id = "temp_frame_id";
+    so3_command_->force.x = 0;
+    so3_command_->force.y = 0;
+    so3_command_->force.z = 0;
+    so3_command_->orientation.x = ori_.x;
+    so3_command_->orientation.y = ori_.y;
+    so3_command_->orientation.z = ori_.z;
+    so3_command_->orientation.w = ori_.w;
+    so3_command_->angular_velocity.x = 0;
+    so3_command_->angular_velocity.y = 0;
+    so3_command_->angular_velocity.z = 0;
+    for(int i = 0; i < 3; i++)
+    {
+      so3_command_->kR[i] = 0;
+      so3_command_->kOm[i] = 0;
+    }
+    so3_command_->aux.current_yaw = 0;
+    so3_command_->aux.kf_correction = 0;
+    so3_command_->aux.angle_corrections[0] = 0;
+    so3_command_->aux.angle_corrections[1] = 0;
+    so3_command_->aux.enable_motors = true;
+    so3_command_->aux.use_external_yaw = false;
+    so3_command_pub_.publish(so3_command_);
   }
   else
   {
@@ -390,11 +415,11 @@ void hover_in_place()
 
 void go_home()
 {
-  state_ = LINE_TRACKER_JERK;
-  ROS_INFO("Engaging controller: LINE_TRACKER_JERK");
+  state_ = LINE_TRACKER_MIN_JERK;
+  ROS_INFO("Engaging controller: LINE_TRACKER_MIN_JERK");
   pub_goal_min_jerk_.publish(home_);
   controllers_manager::Transition transition_cmd;
-  transition_cmd.request.controller = line_tracker_jerk;
+  transition_cmd.request.controller = line_tracker_min_jerk;
   srv_transition_.call(transition_cmd);
 }
 
@@ -411,7 +436,7 @@ void go_to(const quadrotor_msgs::FlatOutputs goal)
 static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
 {
   have_odom_ = true;
-
+ 
   pos_ = msg->pose.pose.position;
   vel_ = msg->twist.twist.linear; 
   ori_ = msg->pose.pose.orientation;
@@ -422,55 +447,45 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
     updateTrajGoal();
     pub_goal_trajectory_.publish(traj_goal_);
   }
-
-  if (state_ == PERCH)
+  else if (state_ == PERCH)
   {
-    if (cut_motors_after_traj)
+    so3_command_pub_.publish(so3_command_);
+    
+    // If the perch was not successful, then recover    
+    if (pos_.z < traj[traj.size()-1][2][0] + zoff - 0.5) // && pos_.x > traj[traj.size()-1][0][0])
     {
-      // Publish the E-Stop command
-      ROS_WARN("E-STOP");
-      std_msgs::Empty estop_cmd;
-      pub_estop_.publish(estop_cmd);
+      state_ = RECOVER;
+      traj_goal_.position.x = pos_.x + 0.5;
+      traj_goal_.position.y = pos_.y;
+      traj_goal_.position.z = pos_.z + 0.5;
+      traj_goal_.velocity.x = 0;
+      traj_goal_.velocity.y = 0;
+      traj_goal_.velocity.z = 0;
+      traj_goal_.acceleration.x = 0;
+      traj_goal_.acceleration.y = 0;
+      traj_goal_.acceleration.z = 0;
+      traj_goal_.jerk.x = 0;
+      traj_goal_.jerk.y = 0;
+      traj_goal_.jerk.z = 0;
+      traj_goal_.kx[0] = traj[0][4][0] / 3.0;
+      traj_goal_.kx[1] = traj[0][4][1] / 3.0;
+      traj_goal_.kx[2] = traj[0][4][2] / 3.0;
+      traj_goal_.kv[0] = traj[0][4][3] / 3.0;
+      traj_goal_.kv[1] = traj[0][4][4] / 3.0;
+      traj_goal_.kv[2] = traj[0][4][5] / 3.0;
 
-      // Disable motors
-      ROS_WARN("Disarming motors...");
-      std_msgs::Bool motors_cmd;
-      motors_cmd.data = false;
-      pub_motors_.publish(motors_cmd);
-
-      pub_goal_trajectory_.publish(traj_goal_);
-
-      //// We want the desired position and velocity errors to be zero
-      //traj_goal_.position = pos_;
-      //traj_goal_.velocity = vel_;
-     
-      //traj_goal_.acceleration = tf::Vector3(0,0,- 9.810);  
-      //// Specify the orientation
-      //float des_acc_mag = 0.0001;
-      //float acc_mag = std::sqrt(
-      //    traj_goal_.position.x*traj_goal_.position.x 
-      //    + traj_goal_.position.y*traj_goal_.position.y
-      //    + traj_goal_.position.z*traj_goal_.position.z);
-
-      //traj_goal_.acceleration.x = des_acc_mag * traj_goal_.acceleration.x / acc_mag;
-      //traj_goal_.acceleration.y = des_acc_mag * traj_goal_.acceleration.y / acc_mag;
-      //traj_goal_.acceleration.z = des_acc_mag * traj_goal_.acceleration.z / acc_mag - mass_ * 9.81; // Note: we are subtracting gravity
-
-      //// Angular rates = 0
-      //traj_goal_.jerk.x = 0;
-      //traj_goal_.jerk.y = 0;
-      //traj_goal_.jerk.z = 0;
-     
-      //// Publish the trajectory goal 
-      //// Note: the tracker will update the header.stamp and header.frame_id fields
-      //pub_goal_trajectory_.publish(traj_goal_);
-    }
-    else
-    {
-      hover_in_place();
+      // Switch to the correct controller
+      controllers_manager::Transition transition_cmd;
+      transition_cmd.request.controller = trajectory_tracker_str;
+      srv_transition_.call(transition_cmd);
     }
   }
-
+  
+  if (state_ == RECOVER) 
+  {
+    ROS_WARN_THROTTLE(1, "Attempting to recover...");
+    pub_goal_trajectory_.publish(traj_goal_);
+  }
 
   static tf::Quaternion q;
   static double roll, pitch, yaw;
@@ -489,14 +504,12 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
   R.getRotation(q);
   q.normalize();
 
-#ifdef SAFETY_ON
   // Position and attitude Safety Catch
   if (safety && (abs(pos_.x) > 2.2 || abs(pos_.y) > 1.8|| pos_.z > 3.5 || pos_.z < 0.2))
   {
     ROS_WARN("Robot has exited safe box. Safety Catch initiated...");
     hover_in_place();
   }
-#endif
 }
 
 int main(int argc, char **argv)
@@ -509,6 +522,13 @@ int main(int argc, char **argv)
   n.param("state_control/offsets/y", yoff, 0.0);
   n.param("state_control/offsets/z", zoff, 0.0);
   n.param("state_control/offsets/yaw", yaw_off, 0.0);
+  /*
+  n.param("so3_control/gains/pos/x", kx_[0]);
+  n.param("so3_control/gains/pos/y", kx_[1]);
+  n.param("so3_control/gains/pos/z", kx_[2]);
+  n.param("so3_control/gains/vel/x", kv_[0]);
+  n.param("so3_control/gains/vel/y", kv_[1]);
+  n.param("so3_control/gains/vel/z", kv_[2]); */
   ROS_INFO("Quad using offsets: {xoff: %2.2f, yoff: %2.2f, zoff: %2.2f, yaw_off: %2.2f}", xoff, yoff, zoff, yaw_off);
  
   n.param("state_control/traj_filename", traj_filename, string("traj.csv"));
@@ -516,7 +536,7 @@ int main(int argc, char **argv)
   n.param("mass", mass_, 0.5);
 
   // Publishers
-  srv_transition_= n.serviceClient<controllers_manager::Transition>("controllers_manager/transition");
+  srv_transition_ = n.serviceClient<controllers_manager::Transition>("controllers_manager/transition");
   pub_goal_min_jerk_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker_min_jerk/goal", 1);
   pub_goal_distance_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker_distance/goal", 1);
   pub_goal_velocity_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/velocity_tracker/vel_cmd_with_yaw", 1);
@@ -525,10 +545,12 @@ int main(int argc, char **argv)
   pub_info_bool_ = n.advertise<std_msgs::Bool>("traj_signal", 1);
   pub_motors_ = n.advertise<std_msgs::Bool>("motors", 1);
   pub_estop_ = n.advertise<std_msgs::Empty>("estop", 1);
+  so3_command_pub_ = n.advertise<quadrotor_msgs::SO3Command>("so3_cmd", 10);
+  
 
   // Subscribers
-  ros::Subscriber sub_odom = n.subscribe("odom", 1, &odom_cb, ros::TransportHints().tcpNoDelay());
-  ros::Subscriber sub_nanokontrol = n.subscribe("/nanokontrol2", 1, nanokontrol_cb, ros::TransportHints().tcpNoDelay());
+  ros::Subscriber sub_odom = n.subscribe("odom", 10, &odom_cb, ros::TransportHints().tcpNoDelay());
+  ros::Subscriber sub_nanokontrol = n.subscribe("/nanokontrol2", 10, nanokontrol_cb, ros::TransportHints().tcpNoDelay());
 
   // Spin
   ros::spin();

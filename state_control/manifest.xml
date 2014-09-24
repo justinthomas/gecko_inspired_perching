@@ -13,9 +13,7 @@
   <depend package="nav_msgs"/>
   <depend package="std_srvs"/>
   <depend package="controllers_manager"/>
-  <depend package="velocity_tracker"/>
-  <depend package="line_tracker"/>
-  <depend package="trajectory_tracker"/>
+  <depend package="tf"/>
 </package>
 
 
