@@ -452,11 +452,11 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
     so3_command_pub_.publish(so3_command_);
     
     // If the perch was not successful, then recover    
-    if (pos_.z < traj[traj.size()-1][2][0] + zoff - 0.5) // && pos_.x > traj[traj.size()-1][0][0])
+    if (pos_.z < traj[traj.size()-1][2][0] + zoff - 0.5 && pos_.x > traj[traj.size()-1][0][0])
     {
       state_ = RECOVER;
       traj_goal_.position.x = pos_.x + 0.5;
-      traj_goal_.position.y = pos_.y;
+      traj_goal_.position.y = pos_.y + 0.2;
       traj_goal_.position.z = pos_.z + 0.5;
       traj_goal_.velocity.x = 0;
       traj_goal_.velocity.y = 0;

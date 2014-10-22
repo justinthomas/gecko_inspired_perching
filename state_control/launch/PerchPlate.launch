@@ -2,9 +2,7 @@
   
   <!-- Params --> 
   <arg name="model" default="PerchPlate"/>
-  <arg name="mass" value="0.565"/>
-  <!-- arg name="mass" value="0.5"/ -->
-  <arg name="vicon_fps" value="150"/>
+  <arg name="vicon_fps" value="100"/>
 
   <include file="$(find vicon)/launch/vicon.launch" />
 
