@@ -2,7 +2,7 @@
 
   <!-- Params -->
   <arg name="model" default="QuadrotorFoxtrot"/>
-  <arg name="mass" value="0.585"/>
+  <arg name="mass" value="0.540"/>
   <!-- arg name="mass" value="0.5"/ -->
   <arg name="vicon_fps" value="100"/>
 
