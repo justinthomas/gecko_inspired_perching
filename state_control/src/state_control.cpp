@@ -24,6 +24,8 @@ enum controller_state
 {
   INIT,
   TAKEOFF,
+  PREP_TAKEOFF_TRAJ,
+  TAKEOFF_TRAJ,
   HOVER,
   LINE_TRACKER_MIN_JERK,
   LINE_TRACKER_YAW,
@@ -31,7 +33,7 @@ enum controller_state
   PERCH,
   RECOVER,
   PREP_TRAJ,
-  TRAJ,
+  PERCH_TRAJ,
   NONE,
 };
 
@@ -42,14 +44,11 @@ static geometry_msgs::Point home_;
 
 // Stuff for trajectory
 #include <string>
-traj_type traj;
-ros::Time traj_start_time; 
-double traj_time;
-static ros::Publisher pub_goal_trajectory_;
-quadrotor_msgs::PositionCommand traj_goal_;
-static const std::string trajectory_tracker_str("trajectory_tracker/TrajectoryTracker");
-void updateTrajGoal();
-static std::string traj_filename;
+Trajectory perch_traj, takeoff_traj;
+static ros::Publisher pub_position_cmd_;
+quadrotor_msgs::PositionCommand traj_goal;
+void UpdatePerchTrajectory(Trajectory);
+static std::string perch_traj_filename, takeoff_traj_filename;
 quadrotor_msgs::SO3Command::Ptr so3_command_(new quadrotor_msgs::SO3Command);
 
 // States
@@ -113,16 +112,16 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     motors_cmd.data = false;
     pub_motors_.publish(motors_cmd);
   }
-  
-  if(state_ == INIT) 
+
+  if(state_ == INIT)
   {
     if (!have_odom_)
     {
       ROS_INFO("Waiting for Odometry!");
       return;
     }
-  
-    // Motors on (Rec) 
+
+    // Motors on (Rec)
     if(msg->buttons[motors_on_button])
     {
       ROS_INFO("Sending enable motors command");
@@ -130,7 +129,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       motors_cmd.data = true;
       pub_motors_.publish(motors_cmd);
     }
-    
+
     // Take off (Play)
     if(msg->buttons[play_button])
     {
@@ -154,7 +153,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
   {
     // This is executed every time the midi controller changes
     switch(state_)
-    {    
+    {
       case VELOCITY_TRACKER:
         {
           quadrotor_msgs::FlatOutputs goal;
@@ -162,14 +161,14 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
           goal.y = msg->axes[1] * fabs(msg->axes[1]) / 2;
           goal.z = msg->axes[2] * fabs(msg->axes[2]) / 2;
           goal.yaw = msg->axes[3] * fabs(msg->axes[3]) / 2;
-         
+
           pub_goal_velocity_.publish(goal);
           ROS_INFO("Velocity Command: (%1.4f, %1.4f, %1.4f, %1.4f)", goal.x, goal.y, goal.z, goal.yaw);
         }
         break;
 
       default:
-        break;    
+        break;
     }
 
     // Determine whether or not the quad is selected
@@ -178,7 +177,7 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     // Hover
     if(msg->buttons[hover_button])  // Marker Set
     {
-      hover_in_place(); 
+      hover_in_place();
     }
     // Line Tracker
     else if(selected && msg->buttons[line_tracker_button] && (state_ == HOVER || state_ == LINE_TRACKER_MIN_JERK || state_ == TAKEOFF))
@@ -207,8 +206,8 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     // Velocity Tracker
     else if(selected && msg->buttons[velocity_tracker_button] && state_ == HOVER)
     {
-      // Note: We do not want to send a goal of 0 if we are 
-      // already in the velocity tracker controller since it 
+      // Note: We do not want to send a goal of 0 if we are
+      // already in the velocity tracker controller since it
       // could cause steps in the velocity.
 
       state_ = VELOCITY_TRACKER;
@@ -226,32 +225,29 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     }
     else if(msg->buttons[traj_button] && state_ == HOVER)
     {
-      // traj[t_idx][flat_out][deriv]
-      //
-      // Load the trajectory
-      int flag = loadTraj(traj_filename.c_str(), traj);
 
       // If there are any errors
-      if (flag != 0)
+      if (perch_traj.isLoaded() != 0)
       {
         hover_in_place();
-        ROS_WARN("Couldn't load %s.  Error: %d.  Hovering in place...", traj_filename.c_str(), flag);
+        ROS_WARN("Couldn't load %s.  Error: %d.  Hovering in place...",
+            perch_traj.get_filename().c_str(), perch_traj.get_error_code());
       }
       else
       {
         state_ = PREP_TRAJ;
         ROS_INFO("Loading Trajectory.  state_ == PREP_TRAJ;");
-       
-        // Updates traj goal to allow for correct initalization of the trajectory 
-        traj_start_time = ros::Time::now();
-        updateTrajGoal(); 
-        
+
+        // Updates traj goal to allow for correct initalization of the trajectory
+        perch_traj.set_start_time();
+        perch_traj.UpdateGoal(traj_goal);
+
         quadrotor_msgs::FlatOutputs goal;
-        goal.x = traj[0][0][0] + xoff;
-        goal.y = traj[0][1][0] + yoff;
-        goal.z = traj[0][2][0] + zoff;
-        goal.yaw = traj[0][3][0] + yaw_off;
-       
+        goal.x = traj_goal.position.x;
+        goal.y = traj_goal.position.y;
+        goal.z = traj_goal.position.z;
+        goal.yaw = traj_goal.yaw;
+
         pub_goal_yaw_.publish(goal);
         controllers_manager::Transition transition_cmd;
         transition_cmd.request.controller = line_tracker_yaw;
@@ -261,25 +257,24 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
     else if(msg->buttons[play_button] && state_ == PREP_TRAJ)
     {
       // If we are ready to start the trajectory
-      if ( sqrt( pow(traj_goal_.position.x + xoff - pos_.x, 2) + pow(traj_goal_.position.y + yoff - pos_.y, 2) + pow(traj_goal_.position.z + zoff - pos_.z, 2) ) < .03 ||
+      if ( sqrt( pow(traj_goal.position.x + xoff - pos_.x, 2) + pow(traj_goal.position.y + yoff - pos_.y, 2) + pow(traj_goal.position.z + zoff - pos_.z, 2) ) < .03 ||
            sqrt( pow(vel_.x,2) + pow(vel_.y,2) + pow(vel_.z,2) ) < 0.05)
       {
         ROS_INFO("Starting Trajectory");
 
-        state_ = TRAJ;
+        state_ = PERCH_TRAJ;
 
         // Publish the trajectory signal
         std_msgs::Bool traj_on_signal;
         traj_on_signal.data = true;
         pub_info_bool_.publish(traj_on_signal);
-        
-        traj_start_time = ros::Time::now();
-        
-        updateTrajGoal();
-                
-        pub_goal_trajectory_.publish(traj_goal_);
+
+        perch_traj.set_start_time();
+        perch_traj.UpdateGoal(traj_goal);
+
+        pub_position_cmd_.publish(traj_goal);
         controllers_manager::Transition transition_cmd;
-        transition_cmd.request.controller = trajectory_tracker_str;
+        transition_cmd.request.controller = null_tracker_str;
         srv_transition_.call(transition_cmd);
       }
       else
@@ -290,23 +285,17 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
   }
 }
 
-void updateTrajGoal()
+void UpdatePerchTrajectory(Trajectory traj)
 {
-  ros::Time current_time = ros::Time::now();
-  ros::Duration delta_time = current_time - traj_start_time;
-  traj_time = delta_time.toSec();
-
-  unsigned long i = traj_time * 1000;
-
-  if (i > traj.size()-1)
+  if (traj.isCompleted())
   {
     ROS_INFO("Trajectory completed.");
-    
+
     // Publish that we exiting the trajectory
     std_msgs::Bool traj_on_signal;
     traj_on_signal.data = false;
     pub_info_bool_.publish(traj_on_signal);
- 
+
     state_ = PERCH;
     ROS_INFO("Switching to NullTracker");
     controllers_manager::Transition transition_cmd;
@@ -341,39 +330,8 @@ void updateTrajGoal()
   }
   else
   {
-    traj_goal_.position.x = traj[i][0][0] + xoff;
-    traj_goal_.position.y = traj[i][1][0] + yoff;
-    traj_goal_.position.z = traj[i][2][0] + zoff;
-    
-    traj_goal_.velocity.x = traj[i][0][1];
-    traj_goal_.velocity.y = traj[i][1][1];
-    traj_goal_.velocity.z = traj[i][2][1];
-
-    traj_goal_.acceleration.x = traj[i][0][2];
-    traj_goal_.acceleration.y = traj[i][1][2];
-    traj_goal_.acceleration.z = traj[i][2][2];
-
-    traj_goal_.jerk.x = traj[i][0][3];
-    traj_goal_.jerk.y = traj[i][1][3];
-    traj_goal_.jerk.z = traj[i][2][3];
-
-    traj_goal_.yaw = traj[i][3][0] + yaw_off;
-    traj_goal_.yaw_dot = traj[i][3][1];
-  
-    traj_goal_.kx[0] = traj[i][4][0];
-    traj_goal_.kx[1] = traj[i][4][1];
-    traj_goal_.kx[2] = traj[i][4][2];
-    traj_goal_.kv[0] = traj[i][4][3];
-    traj_goal_.kv[1] = traj[i][4][4];
-    traj_goal_.kv[2] = traj[i][4][5];
-
-    ROS_INFO_THROTTLE(1, "Gains: kx: {%2.1f, %2.1f, %2.1f}, kv: {%2.1f, %2.1f, %2.1f}", 
-        traj[i][4][0],
-        traj[i][4][1],
-        traj[i][4][2],
-        traj[i][4][3],
-        traj[i][4][4],
-        traj[i][4][5]);
+    traj.UpdateGoal(traj_goal);
+    pub_position_cmd_.publish(traj_goal);
   }
 }
 
@@ -393,7 +351,7 @@ void hover_at(const geometry_msgs::Point goal)
   pub_goal_distance_.publish(goal);
   usleep(100000);
   controllers_manager::Transition transition_cmd;
-  transition_cmd.request.controller = line_tracker_distance; 
+  transition_cmd.request.controller = line_tracker_distance;
   srv_transition_.call(transition_cmd);
 }
 
@@ -409,7 +367,7 @@ void hover_in_place()
   pub_goal_distance_.publish(goal);
   usleep(100000);
   controllers_manager::Transition transition_cmd;
-  transition_cmd.request.controller = line_tracker_distance; 
+  transition_cmd.request.controller = line_tracker_distance;
   srv_transition_.call(transition_cmd);
 }
 
@@ -436,55 +394,63 @@ void go_to(const quadrotor_msgs::FlatOutputs goal)
 static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
 {
   have_odom_ = true;
- 
+
   pos_ = msg->pose.pose.position;
-  vel_ = msg->twist.twist.linear; 
+  vel_ = msg->twist.twist.linear;
   ori_ = msg->pose.pose.orientation;
 
-  // If we are currently executing a trajectory, update the setpoint
-  if (state_ == TRAJ)
+  // If we are currently perching, update the setpoint
+  if (state_ == PERCH_TRAJ)
   {
-    updateTrajGoal();
-    pub_goal_trajectory_.publish(traj_goal_);
+    UpdatePerchTrajectory(perch_traj);
   }
   else if (state_ == PERCH)
   {
     so3_command_pub_.publish(so3_command_);
-    
-    // If the perch was not successful, then recover    
-    if (pos_.z < traj[traj.size()-1][2][0] + zoff - 0.5 && pos_.x > traj[traj.size()-1][0][0])
+
+    // If the perch was not successful, then recover
+    if (pos_.z < traj_goal.position.z - 0.5 && pos_.x > traj_goal.position.x)
     {
       state_ = RECOVER;
-      traj_goal_.position.x = pos_.x + 0.5;
-      traj_goal_.position.y = pos_.y + 0.2;
-      traj_goal_.position.z = pos_.z + 0.5;
-      traj_goal_.velocity.x = 0;
-      traj_goal_.velocity.y = 0;
-      traj_goal_.velocity.z = 0;
-      traj_goal_.acceleration.x = 0;
-      traj_goal_.acceleration.y = 0;
-      traj_goal_.acceleration.z = 0;
-      traj_goal_.jerk.x = 0;
-      traj_goal_.jerk.y = 0;
-      traj_goal_.jerk.z = 0;
-      traj_goal_.kx[0] = traj[0][4][0] / 3.0;
-      traj_goal_.kx[1] = traj[0][4][1] / 3.0;
-      traj_goal_.kx[2] = traj[0][4][2] / 3.0;
-      traj_goal_.kv[0] = traj[0][4][3] / 3.0;
-      traj_goal_.kv[1] = traj[0][4][4] / 3.0;
-      traj_goal_.kv[2] = traj[0][4][5] / 3.0;
+      traj_goal.position.x = pos_.x + 0.5;
+      traj_goal.position.y = pos_.y + 0.2;
+      traj_goal.position.z = pos_.z + 0.5;
+      traj_goal.velocity.x = 0;
+      traj_goal.velocity.y = 0;
+      traj_goal.velocity.z = 0;
+      traj_goal.acceleration.x = 0;
+      traj_goal.acceleration.y = 0;
+      traj_goal.acceleration.z = 0;
+      traj_goal.jerk.x = 0;
+      traj_goal.jerk.y = 0;
+      traj_goal.jerk.z = 0;
+      traj_goal.kx[0] = 3.7 / 3.0;
+      traj_goal.kx[1] = 3.7 / 3.0;
+      traj_goal.kx[2] = 8.0 / 3.0;
+      traj_goal.kv[0] = 2.4 / 3.0;
+      traj_goal.kv[1] = 2.4 / 3.0;
+      traj_goal.kv[2] = 3.0 / 3.0;
 
       // Switch to the correct controller
       controllers_manager::Transition transition_cmd;
-      transition_cmd.request.controller = trajectory_tracker_str;
+      transition_cmd.request.controller = null_tracker_str;
       srv_transition_.call(transition_cmd);
     }
   }
-  
-  if (state_ == RECOVER) 
+
+  if (state_ == RECOVER)
   {
     ROS_WARN_THROTTLE(1, "Attempting to recover...");
-    pub_goal_trajectory_.publish(traj_goal_);
+    pub_position_cmd_.publish(traj_goal);
+  }
+
+  if (state_ == PREP_TAKEOFF_TRAJ)
+  {
+
+  }
+  else if (state_ == TAKEOFF_TRAJ)
+  {
+
   }
 
   static tf::Quaternion q;
@@ -499,7 +465,7 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
   transform.setRotation(q);
   br.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "/simulator", "/quadrotor"));
 
-  static tf::Matrix3x3 R; 
+  static tf::Matrix3x3 R;
   R.setEulerYPR(0, pitch, roll);
   R.getRotation(q);
   q.normalize();
@@ -530,8 +496,19 @@ int main(int argc, char **argv)
   n.param("so3_control/gains/vel/y", kv_[1]);
   n.param("so3_control/gains/vel/z", kv_[2]); */
   ROS_INFO("Quad using offsets: {xoff: %2.2f, yoff: %2.2f, zoff: %2.2f, yaw_off: %2.2f}", xoff, yoff, zoff, yaw_off);
- 
-  n.param("state_control/traj_filename", traj_filename, string("traj.csv"));
+
+  // The perching trajectory
+  n.param("state_control/perch_traj_filename", perch_traj_filename, string("perch_traj.csv"));
+  perch_traj.set_filename(perch_traj_filename);
+  perch_traj.setOffsets(xoff, yoff, zoff, yaw_off);
+  perch_traj.LoadTrajectory();
+
+  // The takeoff trajectory
+  n.param("state_control/takeoff_traj_filename", takeoff_traj_filename, string("takeoff_traj.csv"));
+  takeoff_traj.set_filename(takeoff_traj_filename);
+  takeoff_traj.setOffsets(xoff, yoff, zoff, yaw_off);
+  takeoff_traj.LoadTrajectory();
+
   n.param("state_control/safety_catch", safety, true);
   n.param("mass", mass_, 0.5);
 
@@ -541,12 +518,11 @@ int main(int argc, char **argv)
   pub_goal_distance_ = n.advertise<geometry_msgs::Vector3>("controllers_manager/line_tracker_distance/goal", 1);
   pub_goal_velocity_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/velocity_tracker/vel_cmd_with_yaw", 1);
   pub_goal_yaw_ = n.advertise<quadrotor_msgs::FlatOutputs>("controllers_manager/line_tracker_yaw/goal", 1);
-  pub_goal_trajectory_ = n.advertise<quadrotor_msgs::PositionCommand>("controllers_manager/trajectory_tracker/goal", 1);
+  pub_position_cmd_ = n.advertise<quadrotor_msgs::PositionCommand>("position_cmd", 1);
   pub_info_bool_ = n.advertise<std_msgs::Bool>("traj_signal", 1);
   pub_motors_ = n.advertise<std_msgs::Bool>("motors", 1);
   pub_estop_ = n.advertise<std_msgs::Empty>("estop", 1);
   so3_command_pub_ = n.advertise<quadrotor_msgs::SO3Command>("so3_cmd", 10);
-  
 
   // Subscribers
   ros::Subscriber sub_odom = n.subscribe("odom", 10, &odom_cb, ros::TransportHints().tcpNoDelay());
