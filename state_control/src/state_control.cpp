@@ -1,23 +1,34 @@
+// Standard C++
+#include <math.h>
+#include <iostream>
+
+// ROS related
 #include <ros/ros.h>
-#include <controllers_manager/Transition.h>
 #include <geometry_msgs/Vector3.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <geometry_msgs/Quaternion.h>
-#include <quadrotor_msgs/FlatOutputs.h>
-#include <quadrotor_msgs/PositionCommand.h>
-#include <quadrotor_msgs/SO3Command.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
 #include <std_msgs/Float64.h>
+
+// TF stuff
 #include <tf/transform_datatypes.h>
 #include <tf/LinearMath/Matrix3x3.h>
-#include <math.h>
-#include <iostream>
+#include <tf/transform_broadcaster.h>
+
+// quadrotor_control
+#include <controllers_manager/Transition.h>
+#include <quadrotor_msgs/FlatOutputs.h>
+#include <quadrotor_msgs/PositionCommand.h>
+#include <quadrotor_msgs/SO3Command.h>
+#include <quadrotor_msgs/PWMCommand.h>
+
+// Project specific
 #include "nano_kontrol2.h"
 #include <trajectory.h>
-#include <tf/transform_broadcaster.h>
+
 using namespace std;
 
 enum controller_state
@@ -64,6 +75,7 @@ static ros::Publisher pub_goal_yaw_;
 static ros::Publisher pub_info_bool_;
 static ros::ServiceClient srv_transition_;
 static ros::Publisher so3_command_pub_;
+static ros::Publisher pub_pwm_command_;
 
 // Quadrotor Pose
 static geometry_msgs::Point pos_;
@@ -90,6 +102,13 @@ void go_to(const quadrotor_msgs::FlatOutputs goal);
 static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
 {
   cut_motors_after_traj = msg->buttons[7];
+
+  {
+    quadrotor_msgs::PWMCommand pwm_cmd;
+    pwm_cmd.pwm[0] = (msg->axes[8] + 1) / 2;
+    pub_pwm_command_.publish(pwm_cmd);
+    cout << "Published " << pwm_cmd.pwm[0] << " for PWM" << endl;
+  }
 
   for(int i=0; i<35; i++)
   {
@@ -481,13 +500,13 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
 int main(int argc, char **argv)
 {
   ros::init(argc, argv, "state_control");
-  ros::NodeHandle n;
+  ros::NodeHandle n("~");
 
   // Now, we need to set the formation offsets for this robot
-  n.param("state_control/offsets/x", xoff, 0.0);
-  n.param("state_control/offsets/y", yoff, 0.0);
-  n.param("state_control/offsets/z", zoff, 0.0);
-  n.param("state_control/offsets/yaw", yaw_off, 0.0);
+  n.param("offsets/x", xoff, 0.0);
+  n.param("offsets/y", yoff, 0.0);
+  n.param("offsets/z", zoff, 0.0);
+  n.param("offsets/yaw", yaw_off, 0.0);
   /*
   n.param("so3_control/gains/pos/x", kx_[0]);
   n.param("so3_control/gains/pos/y", kx_[1]);
@@ -498,18 +517,18 @@ int main(int argc, char **argv)
   ROS_INFO("Quad using offsets: {xoff: %2.2f, yoff: %2.2f, zoff: %2.2f, yaw_off: %2.2f}", xoff, yoff, zoff, yaw_off);
 
   // The perching trajectory
-  n.param("state_control/perch_traj_filename", perch_traj_filename, string("perch_traj.csv"));
+  n.param("perch_traj_filename", perch_traj_filename, string("perch_traj.csv"));
   perch_traj.set_filename(perch_traj_filename);
   perch_traj.setOffsets(xoff, yoff, zoff, yaw_off);
   perch_traj.LoadTrajectory();
 
   // The takeoff trajectory
-  n.param("state_control/takeoff_traj_filename", takeoff_traj_filename, string("takeoff_traj.csv"));
+  n.param("takeoff_traj_filename", takeoff_traj_filename, string("takeoff_traj.csv"));
   takeoff_traj.set_filename(takeoff_traj_filename);
   takeoff_traj.setOffsets(xoff, yoff, zoff, yaw_off);
   takeoff_traj.LoadTrajectory();
 
-  n.param("state_control/safety_catch", safety, true);
+  n.param("safety_catch", safety, true);
   n.param("mass", mass_, 0.5);
 
   // Publishers
@@ -522,7 +541,8 @@ int main(int argc, char **argv)
   pub_info_bool_ = n.advertise<std_msgs::Bool>("traj_signal", 1);
   pub_motors_ = n.advertise<std_msgs::Bool>("motors", 1);
   pub_estop_ = n.advertise<std_msgs::Empty>("estop", 1);
-  so3_command_pub_ = n.advertise<quadrotor_msgs::SO3Command>("so3_cmd", 10);
+  so3_command_pub_ = n.advertise<quadrotor_msgs::SO3Command>("so3_cmd", 1);
+  pub_pwm_command_ = n.advertise<quadrotor_msgs::PWMCommand>("pwm_cmd", 1);
 
   // Subscribers
   ros::Subscriber sub_odom = n.subscribe("odom", 10, &odom_cb, ros::TransportHints().tcpNoDelay());
