@@ -14,7 +14,6 @@ Trajectory::Trajectory()
   loaded = false;
 }
 
-
 void Trajectory::setOffsets(double x, double y, double z, double yaw) {
   xoff = x; yoff = y; zoff = z; yaw_off = yaw;
 }
