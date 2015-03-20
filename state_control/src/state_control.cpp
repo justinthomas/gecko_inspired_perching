@@ -13,7 +13,7 @@
 #include <std_msgs/Empty.h>
 #include <std_msgs/Float64.h>
 
-// TF stuff
+// TF
 #include <tf/transform_datatypes.h>
 #include <tf/LinearMath/Matrix3x3.h>
 #include <tf/transform_broadcaster.h>
@@ -33,6 +33,7 @@ using namespace std;
 
 enum controller_state
 {
+  ESTOP,
   INIT,
   TAKEOFF,
   PREP_TAKEOFF_TRAJ,
@@ -63,11 +64,8 @@ void UpdatePerchTrajectory(Trajectory &traj), UpdateTakeoffTrajectory(Trajectory
 static std::string perch_traj_filename, takeoff_traj_filename;
 quadrotor_msgs::SO3Command::Ptr so3_command_(new quadrotor_msgs::SO3Command);
 
-// Takeoff trajectory
-// static double takeoff_ramp(0);
-
 // States
-static enum controller_state state_ = INIT;
+static enum controller_state state_ = PERCH; // INIT;
 
 // Publishers & services
 static ros::Publisher pub_goal_min_jerk_;
@@ -101,48 +99,28 @@ void hover_in_place();
 void hover_at(const geometry_msgs::Point);
 void go_home();
 void go_to(const quadrotor_msgs::FlatOutputs);
+void estop();
 
 // Callbacks and functions
 static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
 {
   if(msg->buttons[estop_button])
-  {
-    // Publish the E-Stop command
-    ROS_WARN("E-STOP");
-    std_msgs::Empty estop_cmd;
-    pub_estop_.publish(estop_cmd);
-
-    // Disable motors
-    ROS_WARN("Disarming motors...");
-    std_msgs::Bool motors_cmd;
-    motors_cmd.data = false;
-    pub_motors_.publish(motors_cmd);
-  }
+    estop();
 
   // cut_motors_after_traj = msg->buttons[7];
-
-  /*
-  for(int i=0; i<35; i++)
-  {
-    if(msg->buttons[i]==1)
-    {
-      cout << "Button " << i << " was pressed" << endl;
-    }
-  }
-  */
 
   if (msg->buttons[5] == 1)
   {
     // Reset gripper
     quadrotor_msgs::PWMCommand pwm_cmd;
-    pwm_cmd.pwm[0] = 0.4;
+    pwm_cmd.pwm[0] = 0.6;
     pub_pwm_command_.publish(pwm_cmd);
   }
   else if (msg->buttons[6] == 1)
   {
     // Release Gripper
     quadrotor_msgs::PWMCommand pwm_cmd;
-    pwm_cmd.pwm[0] = 0.6;
+    pwm_cmd.pwm[0] = 0.3;
     pub_pwm_command_.publish(pwm_cmd);
   }
   else
@@ -333,16 +311,17 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
       {
         // Prepare for takeoff
         state_ = PREP_TAKEOFF_TRAJ;
+        ROS_INFO("state = PREP_TAKEOFF_TRAJ");
         perch_pos_ = pos_;
 
         controllers_manager::Transition transition_cmd;
         transition_cmd.request.controller = null_tracker_str;
         srv_transition_.call(transition_cmd);
 
-        // Publish that we are starting the trajectory
-        std_msgs::Bool traj_on_signal;
-        traj_on_signal.data = true;
-        pub_info_bool_.publish(traj_on_signal);
+        ROS_INFO("Sending enable motors command");
+        std_msgs::Bool motors_cmd;
+        motors_cmd.data = true;
+        pub_motors_.publish(motors_cmd);
 
         takeoff_traj.setOffsets(pos_.x, pos_.y, pos_.z, yaw_off);
         takeoff_traj.set_start_time();
@@ -404,19 +383,15 @@ void UpdatePerchTrajectory(Trajectory &traj)
 
 void UpdateTakeoffTrajectory(Trajectory &traj)
 {
+  traj.UpdateGoal(traj_goal);
+  pub_position_cmd_.publish(traj_goal);
+
   if (traj.isCompleted())
   {
-    ROS_INFO("Trajectory completed.");
-
     // Publish that we finished the trajectory
-    std_msgs::Bool traj_on_signal;
-    traj_on_signal.data = false;
-    pub_info_bool_.publish(traj_on_signal);
-  }
-  else
-  {
-    traj.UpdateGoal(traj_goal);
-    pub_position_cmd_.publish(traj_goal);
+    std_msgs::Bool traj_signal;
+    traj_signal.data = false;
+    pub_info_bool_.publish(traj_signal);
   }
 }
 
@@ -427,6 +402,31 @@ static void imu_cb(const sensor_msgs::Imu::ConstPtr &msg)
   imu_info_ = true;
 }
 */
+
+void estop()
+{
+  state_ = ESTOP;
+
+  // Publish the E-Stop command
+  ROS_WARN("E-STOP");
+  std_msgs::Empty estop_cmd;
+  pub_estop_.publish(estop_cmd);
+
+  // Disable motors
+  ROS_WARN("Disarming motors...");
+  std_msgs::Bool motors_cmd;
+  motors_cmd.data = false;
+  pub_motors_.publish(motors_cmd);
+
+  // Switch to null_tracker
+  controllers_manager::Transition transition_cmd;
+  transition_cmd.request.controller = null_tracker_str;
+  srv_transition_.call(transition_cmd);
+
+  // Publish so3_command to stop motors
+  so3_command_->aux.enable_motors = false;
+  so3_command_pub_.publish(so3_command_);
+}
 
 void hover_at(const geometry_msgs::Point goal)
 {
@@ -542,20 +542,30 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
       if (takeoff_ramp < 1.0)
         takeoff_ramp += 0.001;
 
+      // The position command
       pos_cmd = traj_goal;
       pos_cmd.acceleration.x = traj_goal.acceleration.x * takeoff_ramp;
       pos_cmd.acceleration.y = traj_goal.acceleration.y * takeoff_ramp;
-      pos_cmd.acceleration.z = traj_goal.acceleration.z * takeoff_ramp;
+      pos_cmd.acceleration.z = (9.81 + traj_goal.acceleration.z) * takeoff_ramp - 9.81; // kGravity;
+      // cout << "pos_cmd.accel: {" << pos_cmd.acceleration.x  << ", " << pos_cmd.acceleration.y << ", " << pos_cmd.acceleration.z << "}" << endl;
+      pos_cmd.jerk.x = 0; pos_cmd.jerk.y = 0; pos_cmd.jerk.z = 0;
+      pos_cmd.yaw = traj_goal.yaw; pos_cmd.yaw_dot = 0;
       pos_cmd.kx[0] = 0; pos_cmd.kx[1] = 0; pos_cmd.kx[2] = 0;
       pos_cmd.kv[0] = 0; pos_cmd.kv[1] = 0; pos_cmd.kv[2] = 0;
       pub_position_cmd_.publish(pos_cmd);
 
       // Toggle release
-      if (pos_.z < perch_pos_.z - 0.02 && pos_.x > perch_pos_.x + 0.03)
+      if (pos_.z < perch_pos_.z - 0.04 || pos_.x > perch_pos_.x + 0.04)
       {
         state_ = TAKEOFF_TRAJ;
+        ROS_INFO("state = TAKEOFF_TRAJ");
         takeoff_traj.setOffsets(pos_.x, pos_.y, pos_.z, yaw_off);
         takeoff_traj.set_start_time();
+
+        // Publish that we are starting the trajectory
+        std_msgs::Bool traj_on_signal;
+        traj_on_signal.data = true;
+        pub_info_bool_.publish(traj_on_signal);
       }
       break;
 
