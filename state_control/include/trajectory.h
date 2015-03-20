@@ -20,8 +20,8 @@ class Trajectory
     void LoadTrajectory();
     void UpdateGoal(quadrotor_msgs::PositionCommand&);
 
-    void set_start_time() {start_time_ = ros::Time::now();}
-    void set_start_time(ros::Time time) {start_time_ = time;}
+    void set_start_time() {start_time_ = ros::Time::now(); completed = false;}
+    void set_start_time(ros::Time time) {start_time_ = time; completed = false;}
     void set_filename(const std::string fname) {filename_ = fname;}
     void setOffsets(double, double, double, double);
 

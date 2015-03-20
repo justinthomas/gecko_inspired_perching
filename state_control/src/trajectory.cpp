@@ -25,10 +25,16 @@ void Trajectory::UpdateGoal(quadrotor_msgs::PositionCommand &goal)
 
   unsigned long i = traj_time * 1000;
 
-  completed = i > traj_.size()-1;
-
-  if (completed)
+  if (i > traj_.size()-1)
+  {
     i = traj_.size()-1;
+
+    if (!completed)
+    {
+      ROS_INFO("Trajectory completed.");
+      completed = true;
+    }
+  }
 
   goal.position.x = traj_[i][0][0] + xoff;
   goal.position.y = traj_[i][1][0] + yoff;
