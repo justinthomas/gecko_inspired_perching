@@ -107,8 +107,8 @@
       <rosparam file="$(find state_control_gp)/config/hummingbird_gains.yaml" />
       <param name="safety_catch" value="false"/>
 
-      <param name="perch_traj_filename" type="string" value="/home/justin/Dropbox/papers_and_posters/2015-ICRA_Gecko_Perching/current_experiment/traj_perch.csv"/>
-      <param name="takeoff_traj_filename" type="string" value="/home/justin/Dropbox/papers_and_posters/2015-ICRA_Gecko_Perching/current_experiment/traj_takeoff.csv"/>
+      <param name="perch_traj_filename" type="string" value="/home/justin/Dropbox/papers_and_posters/Vertical_Surface_Takeoff/current_experiment/traj_perch.csv"/>
+      <param name="takeoff_traj_filename" type="string" value="/home/justin/Dropbox/papers_and_posters/Vertical_Surface_Takeoff/current_experiment/traj_takeoff.csv"/>
 
       <!-- Publisher Remappings -->
       <remap from="~motors" to="motors"/>
