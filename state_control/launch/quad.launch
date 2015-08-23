@@ -2,19 +2,20 @@
 
   <!-- Params -->
   <arg name="model" default="QuadrotorFoxtrot"/>
-  <arg name="mass" value="0.540"/>
+  <arg name="mass" value="0.581"/>
   <!-- arg name="mass" value="0.5"/ -->
+  <arg name="sim" default="1"/>
   <arg name="vicon_fps" value="100"/>
 
-  <include file="$(find vicon)/launch/vicon.launch" />
+  <include file="$(find vicon)/launch/vicon.launch" unless="$(arg sim)"/>
 
   <!-- Launch vicon odometry node -->
-  <include file="$(find vicon_odom)/launch/ViconOdom.launch">
+  <include file="$(find vicon_odom)/launch/vicon_odom.launch" unless="$(arg sim)">
     <arg name="model" value="$(arg model)" />
     <arg name="vicon_fps" value="$(arg vicon_fps)"/>
   </include>
 
-  <include file="$(find vicon_odom)/launch/ViconOdom.launch">
+  <include file="$(find vicon_odom)/launch/vicon_odom.launch" unless="$(arg sim)">
     <arg name="model" value="PerchPlate" />
     <arg name="vicon_fps" value="$(arg vicon_fps)"/>
   </include>
@@ -29,6 +30,18 @@
   -->
 
   <group ns="$(arg model)">
+    <param name="mass" value="$(arg mass)"/>
+
+    <node pkg="quadrotor_simulator"
+      type="quadrotor_simulator_so3"
+      name="$(arg model)_simulator_so3"
+      output="screen"
+      if="$(arg sim)">
+      <param name="rate/odom" value="100.0"/>
+      <remap from="~odom" to="odom"/>
+      <remap from="~imu" to="imu"/>
+      <remap from="~cmd" to="so3_cmd"/>
+    </node>
 
     <!-- Controllers Manager -->
     <node pkg="nodelet"
@@ -39,10 +52,10 @@
 
     <node pkg="nodelet"
       type="nodelet"
-      name="controllers_manager"
-      args="load controllers_manager/ControllersManager standalone_nodelet"
+      name="trackers_manager"
+      args="load trackers_manager/TrackersManager standalone_nodelet"
       output="screen">
-      <rosparam file="$(find state_control_gp)/config/controllers.yaml"/>
+      <rosparam file="$(find trackers_manager)/config/trackers.yaml"/>
       <rosparam file="$(find state_control_gp)/config/controller_params.yaml"/>
       <rosparam file="$(find state_control_gp)/config/hummingbird_gains.yaml"/>
       <remap from="~odom" to="odom"/>
@@ -65,11 +78,17 @@
       <param name="mass" value="$(arg mass)"/>
     </node>
 
+
+    <!-- Launch comms -->
+    <include file="$(find state_control_gp)/launch/comms.launch" unless="$(arg sim)"/>
+
+    <!--
     <node pkg="nodelet"
       type="nodelet"
       name="quad_encode_msg"
       args="load quad_encode_msg/QuadEncodeMsg standalone_nodelet"
-      output="screen">
+      output="screen"
+      unless="$(arg sim)">
       <remap from="~so3_cmd" to="so3_cmd"/>
       <remap from="~serial_msg" to="to_robot"/>
     </node>
@@ -78,21 +97,35 @@
       type="nodelet"
       name="quad_decode_msg"
       args="load quad_decode_msg/QuadDecodeMsg standalone_nodelet"
-      output="screen">
+      output="screen"
+      unless="$(arg sim)">
       <remap from="~serial" to="from_robot"/>
     </node>
 
-    <!-- For serial communication -->
     <node pkg="nodelet"
       type="nodelet"
       name="quad_serial_comm"
       args="load quad_serial_comm/QuadSerialComm standalone_nodelet"
-      output="screen">
+      output="screen"
+      unless="$(arg sim)">
       <param name="device" value="/dev/ttyUSB0"/>
-      <!-- param name="baud_rate" value="230400"/ -->
       <param name="baud_rate" value="57600"/>
       <remap from="~to_robot" to="to_robot"/>
       <remap from="~from_robot" to="from_robot"/>
+    </node>
+   -->
+
+    <node pkg="mesh_visualization"
+      type="mesh_visualization"
+      name="mesh_visualization"
+      output="screen"
+      if="$(arg sim)">
+      <param name="mesh_resource" value="package://mesh_visualization/mesh/hummingbird.mesh" />
+      <param name="color/r" value="0.0"/>
+      <param name="color/g" value="0.0"/>
+      <param name="color/b" value="1.0"/>
+      <param name="color/a" value="0.7"/>
+      <remap from="~odom" to="odom"/>
     </node>
 
     <!-- This is the state control node -->
@@ -102,7 +135,6 @@
       output="screen">
 
       <param name="mass" value="$(arg mass)" />
-      <rosparam file="$(find state_control_gp)/config/$(arg model)_params.yaml" />
       <rosparam file="$(find state_control_gp)/config/$(arg model)_params.yaml" />
       <rosparam file="$(find state_control_gp)/config/hummingbird_gains.yaml" />
       <param name="safety_catch" value="false"/>
@@ -116,10 +148,10 @@
       <remap from="~so3_cmd" to="so3_cmd"/>
       <remap from="~position_cmd" to="position_cmd"/>
       <remap from="~pwm_cmd" to="quad_encode_msg/pwm_cmd"/>
-      <remap from="~controllers_manager/line_tracker_min_jerk/goal" to="controllers_manager/line_tracker_min_jerk/goal"/>
-      <remap from="~controllers_manager/line_tracker_distance/goal" to="controllers_manager/line_tracker_distance/goal"/>
-      <remap from="~controllers_manager/velocity_tracker/vel_cmd_with_yaw" to="controllers_manager/velocity_tracker/vel_cmd_with_yaw"/>
-      <remap from="~controllers_manager/line_tracker_yaw/goal" to="controllers_manager/line_tracker_yaw/goal"/>
+      <remap from="~trackers_manager/line_tracker_min_jerk/goal" to="trackers_manager/line_tracker_min_jerk/goal"/>
+      <remap from="~trackers_manager/line_tracker_distance/goal" to="trackers_manager/line_tracker_distance/goal"/>
+      <remap from="~trackers_manager/velocity_tracker/vel_cmd_with_yaw" to="trackers_manager/velocity_tracker/vel_cmd_with_yaw"/>
+      <remap from="~trackers_manager/line_tracker_yaw/goal" to="trackers_manager/line_tracker_yaw/goal"/>
 
       <!-- Subscriber Remappings -->
       <remap from="~imu" to="quad_decode_msg/imu"/>
@@ -127,7 +159,7 @@
       <remap from="~image_features_pp" to="image_features_pp"/>
 
       <!-- Service Remappings -->
-      <remap from="~controllers_manager/transition" to="controllers_manager/transition"/>
+      <remap from="~trackers_manager/transition" to="trackers_manager/transition"/>
 
     </node>
   </group>
