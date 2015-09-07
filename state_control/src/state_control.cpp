@@ -20,8 +20,8 @@
 #include <tf/transform_broadcaster.h>
 
 // quadrotor_control
-#include <quadrotor_msgs/SO3Command.h>
 #include <mav_manager/manager.h>
+#include <quadrotor_msgs/SO3Command.h>
 #include <quadrotor_msgs/PWMCommand.h>
 
 // Project specific
@@ -63,14 +63,13 @@ static ros::Publisher pub_position_cmd_;
 quadrotor_msgs::PositionCommand traj_goal;
 void UpdatePerchTrajectory(Trajectory &traj), UpdateTakeoffTrajectory(Trajectory &traj);
 static std::string perch_traj_filename, takeoff_traj_filename;
-quadrotor_msgs::SO3Command::Ptr so3_command_(new quadrotor_msgs::SO3Command);
+quadrotor_msgs::SO3Command so3_command_;
 
 // States
 static enum controller_state state_ = INIT;
 
 // Publishers & services
 static ros::Publisher pub_info_bool_;
-static ros::Publisher so3_command_pub_;
 static ros::Publisher pub_pwm_command_;
 
 // Quadrotor Pose
@@ -150,6 +149,13 @@ static void nanokontrol_cb(const sensor_msgs::Joy::ConstPtr &msg)
 
           mav->setDesVelWorld(x, y, z, yaw);
           ROS_INFO("Velocity Command: (%1.4f, %1.4f, %1.4f, %1.4f)", x, y, z, yaw);
+        }
+        break;
+
+      case PERCH:
+        {
+          if (msg->buttons[motors_on_button])
+            mav->motors(false);
         }
         break;
 
@@ -297,30 +303,31 @@ void UpdatePerchTrajectory(Trajectory &traj)
     mav->useNullTracker();
 
     // Generate the so3 command
-    so3_command_->header.stamp = ros::Time::now();
-    so3_command_->header.frame_id = "temp_frame_id";
-    so3_command_->force.x = 0;
-    so3_command_->force.y = 0;
-    so3_command_->force.z = 0;
-    so3_command_->orientation.x = ori_.x;
-    so3_command_->orientation.y = ori_.y;
-    so3_command_->orientation.z = ori_.z;
-    so3_command_->orientation.w = ori_.w;
-    so3_command_->angular_velocity.x = 0;
-    so3_command_->angular_velocity.y = 0;
-    so3_command_->angular_velocity.z = 0;
+    so3_command_.header.stamp = ros::Time::now();
+    so3_command_.header.frame_id = "temp_frame_id";
+    so3_command_.force.x = 0;
+    so3_command_.force.y = 0;
+    so3_command_.force.z = 0;
+    so3_command_.orientation.x = ori_.x;
+    so3_command_.orientation.y = ori_.y;
+    so3_command_.orientation.z = ori_.z;
+    so3_command_.orientation.w = ori_.w;
+    so3_command_.angular_velocity.x = 0;
+    so3_command_.angular_velocity.y = 0;
+    so3_command_.angular_velocity.z = 0;
     for(int i = 0; i < 3; i++)
     {
-      so3_command_->kR[i] = 0;
-      so3_command_->kOm[i] = 0;
+      so3_command_.kR[i] = 0;
+      so3_command_.kOm[i] = 0;
     }
-    so3_command_->aux.current_yaw = 0;
-    so3_command_->aux.kf_correction = 0;
-    so3_command_->aux.angle_corrections[0] = 0;
-    so3_command_->aux.angle_corrections[1] = 0;
-    so3_command_->aux.enable_motors = true;
-    so3_command_->aux.use_external_yaw = false;
-    so3_command_pub_.publish(so3_command_);
+    so3_command_.aux.current_yaw = 0;
+    so3_command_.aux.kf_correction = 0;
+    so3_command_.aux.angle_corrections[0] = 0;
+    so3_command_.aux.angle_corrections[1] = 0;
+    so3_command_.aux.enable_motors = true;
+    so3_command_.aux.use_external_yaw = false;
+    
+    mav->setSO3Command(so3_command_);
   }
   else
   {
@@ -352,6 +359,7 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
 
   // Variables maybe needed in switch
   quadrotor_msgs::PositionCommand pos_cmd;
+  quadrotor_msgs::SO3Command so3_cmd;
 
   switch (state_)
   {
@@ -362,7 +370,7 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
 
     case PERCH:
 
-      so3_command_pub_.publish(so3_command_);
+      mav->setSO3Command(so3_command_);
 
       // If the perch was not successful, then recover
       if (pos_.z < traj_goal.position.z - 0.5 && pos_.x > traj_goal.position.x)
@@ -381,21 +389,27 @@ static void odom_cb(const nav_msgs::Odometry::ConstPtr &msg)
     case PREP_TAKEOFF_TRAJ:
 
       // We will check the vertical displacement to determine when to switch to the trajectory
-      static double takeoff_ramp = 0;
+      static double takeoff_ramp = 0.001;
       if (takeoff_ramp < 1.0)
         takeoff_ramp += 0.001;
 
-      // The position command
-      pos_cmd = traj_goal;
-      pos_cmd.acceleration.x = traj_goal.acceleration.x * takeoff_ramp;
-      pos_cmd.acceleration.y = traj_goal.acceleration.y * takeoff_ramp;
-      pos_cmd.acceleration.z = (9.81 + traj_goal.acceleration.z) * takeoff_ramp - 9.81; // kGravity;
-      // cout << "pos_cmd.accel: {" << pos_cmd.acceleration.x  << ", " << pos_cmd.acceleration.y << ", " << pos_cmd.acceleration.z << "}" << endl;
-      pos_cmd.jerk.x = 0; pos_cmd.jerk.y = 0; pos_cmd.jerk.z = 0;
-      pos_cmd.yaw = mav->yaw(); pos_cmd.yaw_dot = 0;
-      pos_cmd.kx[0] = 0; pos_cmd.kx[1] = 0; pos_cmd.kx[2] = 0;
-      pos_cmd.kv[0] = 0; pos_cmd.kv[1] = 0; pos_cmd.kv[2] = 0;
-      mav->setPositionCommand(pos_cmd);
+      ROS_INFO_THROTTLE(1, "Takeoff ramp %2.2f percent", takeoff_ramp * 100.0);
+
+      so3_cmd.header.stamp = ros::Time::now();
+      so3_cmd.header.frame_id = "temp_frame_id";
+      so3_cmd.force.x = mass_ * traj_goal.acceleration.x * takeoff_ramp;
+      so3_cmd.force.y = mass_ * traj_goal.acceleration.y * takeoff_ramp;
+      // so3_cmd.force.z = mass_ * (9.81 + traj_goal.acceleration.z) * takeoff_ramp - 9.81;
+      so3_cmd.force.z = mass_ * traj_goal.acceleration.z * takeoff_ramp;
+      so3_cmd.orientation.x = ori_.x;
+      so3_cmd.orientation.y = ori_.y;
+      so3_cmd.orientation.z = ori_.z;
+      so3_cmd.orientation.w = ori_.w;
+      so3_cmd.aux.current_yaw = mav->yaw();
+      so3_cmd.aux.enable_motors = true;
+      so3_cmd.aux.use_external_yaw = true;
+
+      mav->setSO3Command(so3_cmd);
 
       // Toggle release
       if (pos_.z < perch_pos_.z - 0.05 || pos_.x > perch_pos_.x + 0.05)
@@ -502,7 +516,6 @@ int main(int argc, char **argv)
 
   // Publishers
   pub_info_bool_ = n.advertise<std_msgs::Bool>("traj_signal", 1);
-  so3_command_pub_ = n.advertise<quadrotor_msgs::SO3Command>("so3_cmd", 1);
   pub_pwm_command_ = n.advertise<quadrotor_msgs::PWMCommand>("pwm_cmd", 1);
 
   // Subscribers
